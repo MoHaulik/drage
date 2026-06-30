@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <title>Drageflugt — NXT/Care</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.module.js"
+    }
+  }
+  </script>
+  <style>
+    :root{
+      --sky-100:#e0f2fe; --sky-500:#8bb1e9;
+      --spring:0.6s cubic-bezier(0.175,0.885,0.32,1.25);
+      --btn-size:clamp(220px,35vw,450px);
+      --icon-size:clamp(128px,19.2vw,256px);
+    }
+    *{-webkit-tap-highlight-color:transparent;}
+    body{margin:0;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Segoe UI",Roboto,sans-serif;background:var(--sky-100);}
+    #overlay{position:absolute;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;background:var(--sky-100);}
+    .play-svg{width:var(--icon-size);height:var(--icon-size);fill:currentColor;margin-left:10%;transition:all var(--spring);}
+    /* === LIQUID SKY PUDDLE === */
+    .xr-btn{position:relative;cursor:pointer;outline:none;border:none;display:flex;align-items:center;justify-content:center;user-select:none;transition:all var(--spring);
+      width:calc(var(--btn-size)*1.2);height:calc(var(--btn-size)*1.1);
+      border-radius:60% 40% 40% 60% / 50% 60% 40% 50%;
+      background:var(--sky-100);color:var(--sky-500);
+      box-shadow:inset 15px 15px 30px #b9ddf5, inset -15px -15px 30px #ffffff;}
+    .xr-btn:hover{border-radius:50%;transform:scale(1.05);background:var(--sky-500);color:var(--sky-100);box-shadow:15px 15px 30px #b9ddf5, -15px -15px 30px #ffffff;}
+    .xr-btn:active{transform:scale(0.95);}
+    #toast{position:fixed;bottom:-120px;left:50%;transform:translateX(-50%);background:var(--sky-500);color:#fff;padding:16px 32px;border-radius:50px;font-weight:600;font-size:1.1rem;box-shadow:0 10px 25px rgba(139,177,233,.4);transition:all .4s cubic-bezier(0.175,0.885,0.32,1.25);z-index:1000;pointer-events:none;white-space:nowrap;}
+    #toast.show{bottom:60px;}
+    .webxr-hidden{display:none!important;}
+    .exit-x{position:fixed;top:20px;right:20px;background:rgba(255,255,255,.9);color:#0f172a;border:none;border-radius:50%;width:50px;height:50px;display:none;align-items:center;justify-content:center;font-size:26px;cursor:pointer;z-index:1000;box-shadow:0 6px 16px rgba(14,165,233,.18);}
+    #hint{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,.9);color:#0f172a;font-weight:700;font-size:.95rem;padding:10px 20px;border-radius:100px;display:none;z-index:1000;box-shadow:0 6px 16px rgba(14,165,233,.18);white-space:nowrap;}
+    .in-session .exit-x,.in-session #hint{display:flex;}
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute"><defs><g id="icon-play"><path d="M8 5v14l11-7z" stroke-linejoin="round" stroke-linecap="round"/></g></defs></svg>
+
+  <div id="overlay">
+    <button class="xr-btn" id="start-button" aria-label="Start XR Experience">
+      <svg class="play-svg" viewBox="0 0 24 24"><use href="#icon-play"></use></svg>
+    </button>
+  </div>
+
+  <div id="toast">Drageflugt åbner…</div>
+  <button class="exit-x" id="exit-x" aria-label="Luk">×</button>
+  <div id="hint">👆 Langt tryk (5s) = menu · 👏 Hænder sammen = luk</div>
+  <audio id="music" preload="auto" loop><source src="music.mp3" type="audio/mpeg"></audio>
+
+  <script type="module">
+  import * as THREE from 'three';
+
+  // ───────────────────────── core ─────────────────────────
+  let scene, camera, renderer, clock = new THREE.Clock();
+  let xrMode = false, isLaunching = false;
+  let state = 'closed';              // closed|select|ascend|portal|menu|pong|breakout|invaders|asteroids|snake
+  const GAMES = ['pong','breakout','invaders','asteroids','snake'];
+
+  const R = 1.4, PW = 1.0, PH = 1.0, OBJ_Z = 0.1, KITE_Z = 0.35, CLOUD_Z = 0.05;
+  const SHIELD_Z = 0.12;             // gyldent energi-lag: lige foran bold-planet
+  const $ = id => document.getElementById(id);
+
+  let controllers = [], activeController = null, activeIdx = 0;
+  let isSelecting = false, selStart = 0, holdStart = {};
+  const SELECT_TIME = 4000, HOLD_TIME = 3000;
+
+  let longTapStart = 0;
+  const LONG_TAP_TIME = 5000;                // menu hold — 5s per spec
+
+  let clapStart = 0; const CLAP_DIST = 0.15, CLAP_TIME = 6000;
+  let clapHUD, promptHUD;
+
+  const SEG_GAP = 0.055, SNAKE_SPEED = 0.7, SNAKE_START = 6, SNAKE_GROW = 3, SNAKE_MAX = 150;
+
+  let gameRig, skyDisc, ring, kite, kiteTail, stringLine, scoreBanner;
+  let portalGlow, glowT = 0;
+  let clouds = [], menuClouds = [];
+  let snakeMesh = null, foodMesh = null, snakeBody = [], snakeLen = 0, snakeTarget = 0, snakeInvuln = 0, foodBob = 0;
+  const foodPos = new THREE.Vector2();
+  let portalT = 0, nightTarget = 0, stormTarget = 0, stormWait = 0;
+  let neutralQuat = new THREE.Quaternion();
+  let kiteLocal = new THREE.Vector2(0,0), aimDir = new THREE.Vector2(0,1);
+  let SG = null, skyWave = 0;                 // Blå Himmel: delte sky-ressourcer + bølgetæller
+  const TAU = Math.PI*2;
+  let ascendFrom = new THREE.Vector3(), ascendT = 0;
+  let dwell = 0, dwellTarget = -1;
+
+  const INVERT_YAW = -1, INVERT_PITCH = 1, GAIN = 3.0;
+
+  // per-spil highscore: hver session starter på 0, rekorder gemmes pr. spil på device
+  let score = 0, lastScore = -1;
+  let highs = {}; try{ highs = JSON.parse(localStorage.getItem('nxtKiteHighs')) || {}; }catch(e){}
+  let beatHigh = false, sessionPrevHigh = 0;
+
+  // game-tuning state
+  let pongTime = 0, pongLost = 0, pongTier = -1;     // adaptive pong
+  let bkLvl = 0;                                      // breakout level
+  let waveN = 0, igT = 0;                             // invader waves + pattern clock
+  let texCloud = null, texEnergy = null;             // shared textures
+
+  // gylden energi: skjold om dragen + glød om bolden
+  let kiteShield = null, shieldA = 0, shieldTarget = 0, ballGlow = null, ballFlare = 0;
+
+  // ── Tordensky: 3D kawaii cloud-invaders (klassisk Space-Invaders logik) ──
+  let CG = null, igFloorY = -0.82, igTotal = 0;
+  const CLOUD_PUFFS=[{s:0.16,x:0,y:0.02,z:0},{s:0.12,x:-0.12,y:0,z:0.02},{s:0.12,x:0.12,y:0,z:0.02},{s:0.15,x:-0.06,y:0.1,z:0},{s:0.15,x:0.06,y:0.1,z:0}];
+  const CLOUD_HORNS=[{x:-0.12,y:0.18,rz:0.4},{x:0.12,y:0.18,rz:-0.4}];
+
+  const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _cam = new THREE.Vector3();
+  const _e = new THREE.Euler(0,0,0,'YXZ'), _q = new THREE.Quaternion();
+  const _inp = new THREE.Vector2();
+  const _m = new THREE.Matrix4(), _col = new THREE.Color(), _td = new THREE.Vector2(), _tv = new THREE.Vector2();
+
+  const G_BALL = new THREE.SphereGeometry(0.05,18,18);
+  const G_BOX  = new THREE.BoxGeometry(1,1,0.08);
+  const G_BULLET = new THREE.SphereGeometry(0.025,8,8);
+  const G_PART = new THREE.SphereGeometry(1,6,6);
+  const G_SEG  = new THREE.SphereGeometry(1,8,8);
+  const M_BULLET = new THREE.MeshBasicMaterial({color:0xfff3b0,toneMapped:false});
+
+  const PART_N = 70; let parts = [];
+  const BULLET_N = 24; let bullets = [];
+
+  let ball, ballV = new THREE.Vector2(), aiPaddle, bricks = [], invaders = [], rocks = [];
+  let igDir = 1, igX = 0, igY = 0, igSpd = 0.22;
+
+  // ───────────── procedural sky shader (1 draw call) ─────────────
+  const SKY_VS = `
+    varying vec2 vUv;
+    void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `;
+  const SKY_FS = `
+    varying vec2 vUv;
+    uniform float uTime;
+    uniform float uNight;
+    uniform float uStorm;
+    float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+    float noise(vec2 p){
+      vec2 i=floor(p), f=fract(p);
+      vec2 u=f*f*(3.0-2.0*f);
+      return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),u.x),
+                 mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),u.x),u.y);
+    }
+    float fbm(vec2 p){ float v=0.0,a=0.5; for(int i=0;i<4;i++){ v+=a*noise(p); p*=2.02; a*=0.5; } return v; }
+    void main(){
+      vec2 p = vUv; float t = p.y;
+      vec3 dayCol   = mix(vec3(0.91,0.97,1.00), vec3(0.40,0.70,1.00), smoothstep(0.0,1.0,t));
+      vec3 nightCol = mix(vec3(0.16,0.26,0.50), vec3(0.03,0.04,0.13), smoothstep(0.0,1.0,t));
+      float sd = distance(p, vec2(0.74,0.80));
+      float sunGlow = pow(1.0 - smoothstep(0.0,0.55,sd), 2.2);
+      float sunCore = 1.0 - smoothstep(0.02,0.07,sd);
+      vec3  sunCol  = vec3(1.0,0.96,0.85);
+      dayCol += sunCol * sunGlow * 0.55;
+      dayCol  = mix(dayCol, vec3(1.0,0.98,0.92), sunCore);
+      float md = distance(p, vec2(0.26,0.80));
+      float moonGlow = pow(1.0 - smoothstep(0.0,0.40,md), 2.2);
+      float moonCore = 1.0 - smoothstep(0.02,0.055,md);
+      nightCol += vec3(0.92,0.93,0.78) * moonGlow * 0.45;
+      nightCol  = mix(nightCol, vec3(0.99,0.98,0.91), moonCore);
+      vec2 cuv = p * vec2(2.6,1.7); cuv.x += uTime*0.015;
+      float cl = smoothstep(0.48,0.95, fbm(cuv)*0.8 + noise(cuv*3.0 + vec2(uTime*0.03,0.0))*0.2);
+      cl *= 0.55 + 0.45*smoothstep(0.05,0.55,t);
+      cl = min(1.0, cl + uStorm*0.25);
+      vec3 cloudCol = mix(vec3(1.0), sunCol, sunGlow*0.5);
+      dayCol   = mix(dayCol,   cloudCol,             cl*0.85);
+      nightCol = mix(nightCol, vec3(0.22,0.27,0.45), cl*0.18);
+      vec2 sv = floor(p*230.0); float hs = hash(sv); float star = 0.0;
+      if(hs > 0.984){ star = ((hs-0.984)/0.016) * (0.55 + 0.45*sin(uTime*3.0 + hs*55.0)); }
+      nightCol += vec3(star * smoothstep(0.12,0.22,t));
+      vec3 col = mix(dayCol, nightCol, uNight);
+      float gAvg = dot(col, vec3(0.3,0.59,0.11));
+      col = mix(col, vec3(gAvg)*vec3(0.72,0.78,0.90), uStorm*0.85);
+      col *= 1.0 - smoothstep(0.75,1.02, distance(p,vec2(0.5))*2.0) * 0.22;
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  // ───────────── gyldent energi-skjold (ærlig hitbox m. lyn-kant + træf-ripple) ─────────────
+  const SH_VS = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`;
+  const SH_FS = `
+    varying vec2 vUv;
+    uniform float uTime, uHitAge, uA;
+    uniform vec2 uDim, uHit;
+    float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+    float noise(vec2 p){
+      vec2 i=floor(p), f=fract(p), u=f*f*(3.0-2.0*f);
+      return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),u.x),
+                 mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),u.x),u.y);
+    }
+    float sdCap(vec2 p, vec2 d){
+      float r=min(d.x,d.y); vec2 q=abs(p)-(d-vec2(r));
+      return length(max(q,0.0))+min(max(q.x,q.y),0.0)-r;
+    }
+    void main(){
+      vec2 p=(vUv-0.5)*uDim*3.0;                       // plane er skaleret uDim*3
+      float d=sdCap(p, uDim*0.92);
+      float n=noise(p*16.0+vec2(uTime*2.2,-uTime*1.4))*0.6 + noise(p*5.0-uTime*1.1)*0.4;
+      float ring=1.0-smoothstep(0.0,0.013,abs(d+(n-0.5)*0.02));   // sitrende lyn-kant
+      float halo=(1.0-smoothstep(0.0,0.07,abs(d)))*0.32;          // blød aura
+      float fill=(1.0-smoothstep(-0.06,0.0,d))*0.08;              // svag indre flade
+      float hit=0.0;
+      if(uHitAge<0.6){
+        float k=1.0-uHitAge/0.6; float hd=distance(p,uHit);
+        hit =(1.0-smoothstep(0.0,0.045,abs(hd-(0.02+uHitAge*0.5))))*k*1.5;  // ripple ud fra træffet
+        hit+=(1.0-smoothstep(0.0,0.09,hd))*k;                                // kerne-blink
+      }
+      float fl=0.85+0.15*noise(vec2(uTime*7.0,1.7));
+      float a=clamp((ring*fl+halo+fill+hit)*uA, 0.0, 1.0);
+      vec3 col=mix(vec3(1.0,0.80,0.32), vec3(1.0,0.97,0.86), clamp(ring*0.5+hit,0.0,1.0));
+      gl_FragColor=vec4(col*a, a);
+    }
+  `;
+
+  let ac = null;
+  function beep(freq, dur=0.08, type='sine', vol=0.18){
+    if(!ac) return; const t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
+    o.type=type; o.frequency.value=freq; g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(vol,t+0.01); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t+dur+0.02);
+  }
+  // ── blød lyd-bank til Blå Himmel (ingen skrattende firkant-bølger) ──
+  function swoop(f1,f2,dur,type='sine',vol=0.1){ if(!ac) return; const t=ac.currentTime,o=ac.createOscillator(),g=ac.createGain();
+    o.type=type; o.frequency.setValueAtTime(f1,t); o.frequency.exponentialRampToValueAtTime(Math.max(1,f2),t+dur);
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+0.012); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t+dur+0.03); }
+  let _nb=null;
+  function nz(dur,vol,freq,Q=0.8){ if(!ac) return; const t=ac.currentTime;
+    if(!_nb){ _nb=ac.createBuffer(1,(ac.sampleRate*0.5)|0,ac.sampleRate); const d=_nb.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1; }
+    const s=ac.createBufferSource(); s.buffer=_nb; const f=ac.createBiquadFilter(); f.type='bandpass'; f.frequency.value=freq; f.Q.value=Q;
+    const g=ac.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    s.connect(f).connect(g).connect(ac.destination); s.start(t); s.stop(t+dur+0.03); }
+  function shootSound(){ swoop(720,300,0.13,'sine',0.06); swoop(1500,720,0.06,'triangle',0.025); }   // blød "pew"
+  function splitSound(){ swoop(300,150,0.16,'sine',0.07); nz(0.13,0.045,650,0.7); }                  // luftigt smæk
+  function popSound(){ nz(0.16,0.055,1100,0.7); beep(880,0.07,'sine',0.05); setTimeout(()=>beep(1320,0.08,'sine',0.04),40); } // poof + glimt
+  function rumble(){ swoop(140,68,0.5,'sine',0.04); }                                                // mild, rund torden
+  function skyClearChime(){ [523,659,784,1047,1319].forEach((f,i)=> setTimeout(()=>beep(f,0.2,'sine',0.06),i*95)); nz(0.4,0.025,520,0.5); }
+
+  init();
+
+  function init(){
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
+    scene.add(camera);
+
+    renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference:'high-performance' });
+    renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.xr.enabled = true;
+    renderer.setClearColor(0x000000, 0);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.NoToneMapping;
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const key = new THREE.DirectionalLight(0xffffff, 0.7); key.position.set(1,4,2); scene.add(key);
+    const rim = new THREE.DirectionalLight(0x88aaff, 0.3); rim.position.set(-2,1,-1); scene.add(rim);
+
+    $('start-button').addEventListener('click', launch);
+    $('exit-x').addEventListener('click', () => xrMode ? endXR() : exitPreview());
+    addEventListener('resize', () => { camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+  }
+
+  async function launch(){
+    if(isLaunching) return; isLaunching = true;
+    try{ ac = ac || new (window.AudioContext||window.webkitAudioContext)(); ac.resume(); }catch(e){}
+    $('toast').classList.add('show');
+    let ok = false;
+    if(navigator.xr){ try{ ok = await navigator.xr.isSessionSupported('immersive-ar'); }catch(e){} }
+    if(ok) startAR(); else startPreview();
+  }
+
+  async function startAR(){
+    try{
+      const session = await navigator.xr.requestSession('immersive-ar', {
+        optionalFeatures:['local-floor','hand-tracking','dom-overlay'], domOverlay:{ root:document.body }
+      });
+      onSessionStarted(session);
+    }catch(e){ console.error('AR refused:', e); isLaunching=false; $('toast').classList.remove('show'); startPreview(); }
+  }
+
+  function onSessionStarted(session){
+    xrMode = true;
+    $('start-button').style.display='none';
+    $('overlay').classList.add('webxr-hidden');
+    document.body.classList.add('in-session');
+    renderer.xr.setReferenceSpaceType('local');
+    renderer.xr.setSession(session);
+    buildScene(); buildControllers(session); buildHUDs();
+    renderer.compile(scene, camera);
+    $('music').volume = 0.28; $('music').play().catch(()=>{});
+    session.addEventListener('end', onSessionEnd);
+    renderer.setAnimationLoop(render);
+    startSelect();
+  }
+
+  function startPreview(){
+    xrMode = false;
+    $('start-button').style.display='none';
+    $('overlay').classList.add('webxr-hidden');
+    document.body.classList.add('in-session');
+    $('hint').textContent = '🖱️ Bevæg = styr dragen · Langt klik (5s) = menu';
+    buildScene(); buildHUDs();
+    camera.position.set(0,0,0); camera.lookAt(0,1.25,-1.55);
+    $('music').volume = 0.28; $('music').play().catch(()=>{});
+    addEventListener('mousemove', onMouse);
+    addEventListener('mousedown', () => { longTapStart = Date.now(); fire(); });
+    addEventListener('mouseup', () => { longTapStart = 0; if(state !== 'menu' && GAMES.includes(state)) prompt(''); });
+    addEventListener('keydown', e => { if(e.key==='m'||e.key==='Escape') back(); });
+
+    // Preview mode startup sequence
+    state = 'ascend';
+    ascendT = 0;
+    ascendFrom.set(0, -0.8, -0.6); // Start dragen længere nede
+    kite.position.copy(ascendFrom);
+    kite.visible = true;
+
+    renderer.setAnimationLoop(render);
+  }
+  let mNDC = new THREE.Vector2(0,0);
+  function onMouse(e){ mNDC.set((e.clientX/innerWidth)*2-1, -((e.clientY/innerHeight)*2-1)); }
+
+  function cloudTex(){
+    const c=document.createElement('canvas'); c.width=c.height=128; const x=c.getContext('2d');
+    const g=x.createRadialGradient(64,64,4,64,64,62); g.addColorStop(0,'rgba(255,255,255,.95)'); g.addColorStop(.6,'rgba(255,255,255,.55)'); g.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle=g; x.fillRect(0,0,128,128); const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+  }
+
+  function glowTex(){
+    const c=document.createElement('canvas'); c.width=c.height=256; const x=c.getContext('2d');
+    const g=x.createRadialGradient(128,128,0,128,128,128);
+    g.addColorStop(0,'rgba(255,255,255,1)');
+    g.addColorStop(0.2,'rgba(139,177,233,0.8)');
+    g.addColorStop(1,'rgba(14,165,233,0)');
+    x.fillStyle=g; x.fillRect(0,0,256,256);
+    const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+  }
+
+  // gylden energi-glød (bold + skud) — matcher lynet i Tordenskyer
+  function energyTex(){
+    const c=document.createElement('canvas'); c.width=c.height=128; const x=c.getContext('2d');
+    const g=x.createRadialGradient(64,64,0,64,64,64);
+    g.addColorStop(0,'rgba(255,250,225,1)'); g.addColorStop(0.35,'rgba(255,205,80,0.9)'); g.addColorStop(1,'rgba(255,170,30,0)');
+    x.fillStyle=g; x.fillRect(0,0,128,128);
+    const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+  }
+  function attachGlow(mesh,s){
+    texEnergy = texEnergy || energyTex();
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:texEnergy, transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, opacity:0.85 }));
+    sp.scale.setScalar(s); mesh.add(sp); return sp;
+  }
+  function flareBall(k){ ballFlare = Math.max(ballFlare, k); }   // flare ved serv / mål / træf
+
+  function setShield(hw,hh){
+    if(!kiteShield) return;
+    const fresh = shieldTarget < 1;
+    shieldTarget = 1; kiteShield.visible = true;
+    kiteShield.material.uniforms.uDim.value.set(hw,hh);
+    kiteShield.material.uniforms.uHitAge.value = 9;
+    kiteShield.scale.set(hw*3, hh*3, 1);
+    kiteShield.position.set(kiteLocal.x, kiteLocal.y, SHIELD_Z);
+    if(fresh){ beep(620,0.06,'triangle',0.07); beep(930,0.09,'sine',0.06); }
+  }
+  function hideShield(){ shieldTarget = 0; }
+  function shieldHit(x,y){ if(!kiteShield || !kiteShield.visible) return;
+    kiteShield.material.uniforms.uHit.value.set(x,y); kiteShield.material.uniforms.uHitAge.value = 0; }
+
+  function buildScene(){
+    gameRig = new THREE.Group();
+    gameRig.position.set(0, 1.35, -1.5);
+    gameRig.lookAt(0, 0, 0);
+    gameRig.scale.setScalar(0.001);
+    gameRig.visible = false; // Holdes usynlig indtil portal-sekvensen starter
+    scene.add(gameRig);
+
+    skyDisc = new THREE.Mesh(new THREE.CircleGeometry(R,64),
+      new THREE.ShaderMaterial({ uniforms:{ uTime:{value:0}, uNight:{value:0}, uStorm:{value:0} },
+        vertexShader:SKY_VS, fragmentShader:SKY_FS, side:THREE.DoubleSide }));
+    skyDisc.position.z = -0.15;
+    gameRig.add(skyDisc);
+
+    ring = new THREE.Mesh(new THREE.TorusGeometry(R,0.07,12,64),
+      new THREE.MeshStandardMaterial({ color:0xeaf2ff, roughness:0.5, emissive:0x2b3a66, emissiveIntensity:0.25 }));
+    ring.position.z = 0.0; gameRig.add(ring);
+
+    // Magisk Glow effekt til portal-spawning
+    portalGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex(),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      opacity: 0
+    }));
+    portalGlow.position.set(0, 1.35, -1.4);
+    portalGlow.visible = false;
+    scene.add(portalGlow);
+
+    texCloud = texCloud || cloudTex();
+    for(let i=0;i<6;i++){
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:texCloud, transparent:true, depthWrite:false, opacity:0.9 }));
+      const sc = 0.5 + Math.random()*0.5; s.scale.set(sc*1.6, sc, 1);
+      s.position.set((Math.random()*2-1)*0.9, (Math.random()*2-1)*0.7, CLOUD_Z);
+      s.userData.spd = 0.04 + Math.random()*0.05; gameRig.add(s); clouds.push(s);
+    }
+
+    scoreBanner = textPlane(0.9,0.2);
+    scoreBanner.position.set(0,1.06,OBJ_Z); gameRig.add(scoreBanner);
+    drawScore();
+
+    buildKite();
+    buildMenu();
+
+    // Gyldent energi-skjold om dragen (vises kun i bold-spil; viser den ÆGTE hitbox)
+    kiteShield = new THREE.Mesh(new THREE.PlaneGeometry(1,1),
+      new THREE.ShaderMaterial({
+        uniforms:{ uTime:{value:0}, uHitAge:{value:9}, uA:{value:0},
+          uDim:{value:new THREE.Vector2(0.1,0.1)}, uHit:{value:new THREE.Vector2()} },
+        vertexShader:SH_VS, fragmentShader:SH_FS,
+        transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide }));
+    kiteShield.visible = false; kiteShield.renderOrder = 4;
+    gameRig.add(kiteShield);
+
+    snakeMesh = new THREE.InstancedMesh(G_SEG, new THREE.MeshLambertMaterial({ emissive:0x111111, emissiveIntensity:0.25 }), SNAKE_MAX);
+    snakeMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    snakeMesh.frustumCulled = false; snakeMesh.count = 0; snakeMesh.visible = false;
+    gameRig.add(snakeMesh);
+
+    initPools();
+  }
+
+  function buildKite(){
+    kite = new THREE.Group();
+    const top=[0,0.24,0], rgt=[0.17,0.02,0], bot=[0,-0.30,0], lft=[-0.17,0.02,0], ctr=[0,0,0.02];
+    const tris=[ [top,rgt,ctr],[rgt,bot,ctr],[bot,lft,ctr],[lft,top,ctr] ];
+    const colA=new THREE.Color(0xff7aa2), colB=new THREE.Color(0xffd166), colC=new THREE.Color(0x6ec6ff), colD=new THREE.Color(0x9be870);
+    const quad=[colA,colB,colC,colD]; const pos=[], col=[];
+    tris.forEach((t,qi)=>{ t.forEach(p=>{ pos.push(...p); col.push(quad[qi].r,quad[qi].g,quad[qi].b); }); });
+    const sg=new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+    sg.setAttribute('color', new THREE.Float32BufferAttribute(col,3)); sg.computeVertexNormals();
+    const sail=new THREE.Mesh(sg, new THREE.MeshLambertMaterial({ vertexColors:true, emissive:0x222222, emissiveIntensity:0.35, side:THREE.DoubleSide }));
+    kite.add(sail);
+    const sparMat=new THREE.MeshLambertMaterial({ color:0xffffff, emissive:0x444, emissiveIntensity:0.3 });
+    const vS=new THREE.Mesh(new THREE.BoxGeometry(0.012,0.54,0.012), sparMat); vS.position.z=0.015; kite.add(vS);
+    const hS=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.012,0.012), sparMat); hS.position.set(0,0.02,0.015); kite.add(hS);
+    kiteTail=new THREE.Group();
+    const bowCol=[0xff7aa2,0xffd166,0x6ec6ff,0x9be870,0xff7aa2,0xffd166];
+    for(let i=0;i<6;i++){ const b=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.05,0.008),
+        new THREE.MeshLambertMaterial({ color:bowCol[i], emissive:0x222, emissiveIntensity:0.3 }));
+      b.rotation.z=Math.PI/4; b.position.set(0,-0.34-i*0.075,0); b.userData.i=i; kiteTail.add(b); }
+    kite.add(kiteTail);
+    kite.visible=false; scene.add(kite);
+    const sgeo=new THREE.BufferGeometry(); sgeo.setAttribute('position', new THREE.Float32BufferAttribute(new Array(13*3).fill(0),3));
+    stringLine=new THREE.Line(sgeo, new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.55 }));
+    stringLine.visible=false; scene.add(stringLine);
+  }
+
+  function buildMenu(){
+    const labels=['Pong','Mursten','Tordenskyer','Blå Himmel','Slange'];
+    const pos=[[-0.7,0.42],[0,0.42],[0.7,0.42],[-0.38,-0.42],[0.38,-0.42]];
+    labels.forEach((lab,i)=>{
+      const grp=new THREE.Group(); grp.position.set(pos[i][0],pos[i][1],0.15);
+      const cloud=new THREE.Sprite(new THREE.SpriteMaterial({ map:texCloud, transparent:true, depthWrite:false }));
+      cloud.scale.set(0.62,0.4,1); grp.add(cloud);
+      const lp=textPlane(0.5,0.16,'#0f3a6b',lab); lp.position.z=0.01; grp.add(lp);
+      const ringSel=new THREE.Mesh(new THREE.RingGeometry(0.2,0.22,32,1,0,0.001),
+        new THREE.MeshBasicMaterial({ color:0x0ea5e9, side:THREE.DoubleSide, transparent:true, toneMapped:false }));
+      ringSel.position.z=0.02; grp.add(ringSel);
+      grp.userData={ id:GAMES[i], ring:ringSel, label:lab }; grp.visible=false; gameRig.add(grp); menuClouds.push(grp);
+    });
+  }
+
+  function initPools(){
+    parts=[]; for(let i=0;i<PART_N;i++){ const m=new THREE.Mesh(G_PART, new THREE.MeshBasicMaterial({ transparent:true, depthWrite:false, toneMapped:false }));
+      m.visible=false; scene.add(m); parts.push({ m, on:false, v:new THREE.Vector3(), age:0, life:0, base:0.02 }); }
+    bullets=[]; for(let i=0;i<BULLET_N;i++){ const m=new THREE.Mesh(G_BULLET, M_BULLET); attachGlow(m,0.085);   // gyldne energi-skud
+      m.visible=false; m.position.z=OBJ_Z; gameRig.add(m);
+      bullets.push({ m, on:false, vx:0, vy:0, age:0 }); }
+  }
+
+  function textPlane(w,h,color,txt){
+    const c=document.createElement('canvas'); c.width=512; c.height=Math.round(512*h/w);
+    const tex=new THREE.CanvasTexture(c); tex.encoding=THREE.sRGBEncoding;
+    const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h), new THREE.MeshBasicMaterial({ map:tex, transparent:true, toneMapped:false, side:THREE.DoubleSide, depthWrite:false }));
+    m.userData={ c, x:c.getContext('2d'), tex, color:color||'#fff' };
+    if(txt!==undefined) drawLabel(m,txt); return m;
+  }
+  function drawLabel(m,txt){ const {c,x,tex,color}=m.userData; x.clearRect(0,0,c.width,c.height);
+    x.fillStyle=color; let f=Math.round(c.height*0.5);
+    do{ x.font='800 '+f+'px -apple-system,"SF Pro Rounded","Segoe UI",sans-serif'; f-=4; }
+    while(x.measureText(txt).width>c.width*0.94 && f>20);
+    x.textAlign='center'; x.textBaseline='middle'; x.fillText(txt,c.width/2,c.height/2); tex.needsUpdate=true; }
+  function drawScore(){ if(!scoreBanner) return;
+    drawLabel(scoreBanner, GAMES.includes(state) ? '⭐ '+score+'   🏆 '+(highs[state]|0) : '🪁 Drageflugt'); }
+
+  function buildHUDs(){
+    clapHUD=new THREE.Group(); clapHUD.position.set(0,0.1,-0.7);
+    const c=document.createElement('canvas'); c.width=1024; c.height=220;
+    const tex=new THREE.CanvasTexture(c); tex.encoding=THREE.sRGBEncoding;
+    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(0.6,0.129),
+      new THREE.MeshBasicMaterial({ map:tex, transparent:true, toneMapped:false, depthTest:false, depthWrite:false }));
+    mesh.renderOrder=999; clapHUD.add(mesh);
+    clapHUD.userData={ c, x:c.getContext('2d'), tex }; clapHUD.visible=false; camera.add(clapHUD);
+
+    promptHUD=textPlane(0.78,0.135,'#0f172a','');
+    promptHUD.position.set(0,0.26,-0.8); promptHUD.renderOrder=998;
+    promptHUD.material.depthTest=false; promptHUD.visible=false; camera.add(promptHUD);
+  }
+  function prompt(txt){ if(!promptHUD) return; if(!txt){ promptHUD.visible=false; return; }
+    promptHUD.visible=true; drawPromptGlass(promptHUD, txt); }
+  function drawPromptGlass(m,txt){ const {c,x,tex}=m.userData; x.clearRect(0,0,c.width,c.height);
+    const W=c.width,H=c.height,Rr=H/2; x.fillStyle='rgba(255,255,255,0.92)'; roundRect(x,8,8,W-16,H-16,Rr); x.fill();
+    x.fillStyle='#0f172a'; let f=Math.round(H*0.42);
+    do{ x.font='800 '+f+'px -apple-system,"SF Pro Rounded",sans-serif'; f-=2; }
+    while(x.measureText(txt).width>W*0.80 && f>16);
+    x.textAlign='center'; x.textBaseline='middle'; x.fillText(txt,W/2,H/2); tex.needsUpdate=true; }
+
+  function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+
+  function buildControllers(session){
+    controllers=[];
+    for(let i=0;i<2;i++){
+      const ctrl=renderer.xr.getController(i);
+      ctrl.addEventListener('selectstart', () => {
+        if(state!=='select'&&i===activeIdx){ longTapStart = Date.now(); fire(); }
+      });
+      ctrl.addEventListener('selectend', () => {
+        if(i===activeIdx){ longTapStart = 0; if(state !== 'menu' && GAMES.includes(state)) prompt(''); }
+      });
+      ctrl.addEventListener('squeezestart', () => { if(i===activeIdx) back(); });
+      const tip=new THREE.Group();
+      tip.add(new THREE.Mesh(new THREE.SphereGeometry(0.025,12,12), new THREE.MeshBasicMaterial({ color:0xffffff, toneMapped:false })));
+      tip.add(new THREE.PointLight(0xbfe0ff,1.2,0.4)); ctrl.add(tip);
+      scene.add(ctrl); controllers.push(ctrl);
+    }
+  }
+  function startSelect(){ state='select'; isSelecting=true; selStart=clock.getElapsedTime(); holdStart={};
+    kite.visible=false; stringLine.visible=false; prompt('✋ Løft din frie hånd'); }
+
+  function processSelect(){
+    if(!isSelecting) return;
+    const el=(clock.getElapsedTime()-selStart)*1000; let bestY=-Infinity, best=-1;
+    controllers.forEach((c,i)=>{ if(c.visible && c.position.lengthSq()>0 && c.position.y>bestY){ bestY=c.position.y; best=i; } });
+    if(best>=0){ const c=controllers[best];
+      const inFront = c.position.z>-0.8 && c.position.z<-0.3 && Math.abs(c.position.x)<0.3;
+      if(inFront){ if(!holdStart[best]) holdStart[best]=clock.getElapsedTime();
+        if((clock.getElapsedTime()-holdStart[best])*1000>=HOLD_TIME) return confirmController(best);
+      } else holdStart[best]=null;
+      Object.keys(holdStart).forEach(k=>{ if(+k!==best) holdStart[k]=null; });
+    }
+    if(el>SELECT_TIME) confirmController(Math.max(0,best));
+  }
+  function confirmController(idx){
+    isSelecting=false; activeIdx=idx; activeController=controllers[idx];
+    burst(activeController, 36); beep(660,0.12); beep(880,0.12,'sine',0.14);
+    state='ascend'; ascendT=0; kite.visible=true; stringLine.visible=true;
+    activeController.getWorldPosition(ascendFrom); kite.position.copy(ascendFrom);
+    prompt('🪁 Følg dragen op i himlen');
+  }
+
+  function setNight(on){ nightTarget = on ? 1 : 0; }   // smooth lerp happens in render()
+
+  function enterMenu(){
+    gameRig.scale.setScalar(1); // Sørg for fuld størrelse
+    state='menu'; clearGames(); setNight(false);
+    menuClouds.forEach(g=>{ g.visible=true; g.userData.ring.geometry.dispose(); g.userData.ring.geometry=new THREE.RingGeometry(0.2,0.22,32,1,0,0.001); });
+    dwell=0; dwellTarget=-1; recenter(); prompt('🪁 Vælg et spil');
+    drawLabel(scoreBanner,'🪁 Vælg et spil');
+  }
+
+  function updateMenu(dt){
+    let over=-1;
+    menuClouds.forEach((g,i)=>{
+      const d=Math.hypot(kiteLocal.x-g.position.x, kiteLocal.y-g.position.y);
+      const hot=d<0.26;
+      if(g.children[0]) g.children[0].scale.setScalar(hot?1.08:1.0);
+      if(hot) over=i;
+    });
+    if(over!==dwellTarget){ dwellTarget=over; dwell=0;
+      if(over>=0){ const u=menuClouds[over].userData; drawLabel(scoreBanner,'🏆 '+u.label+': '+(highs[u.id]|0)); }   // vis spillets rekord
+      else drawLabel(scoreBanner,'🪁 Vælg et spil');
+    }
+    menuClouds.forEach((g,i)=>{ const frac = (i===over)? Math.min(1,dwell/1.1):0;
+      const ring=g.userData.ring; ring.geometry.dispose(); ring.geometry=new THREE.RingGeometry(0.2,0.22,32,1,-Math.PI/2, Math.max(0.001, frac*Math.PI*2)); });
+    if(over>=0){ dwell+=dt; if(dwell>=1.1) startGame(menuClouds[over].userData.id); }
+  }
+
+  function startGame(id){
+    longTapStart = 0;
+    menuClouds.forEach(g=>g.visible=false); clearGames(); recenter(); prompt('');
+    score=0; lastScore=-1; beatHigh=false; sessionPrevHigh=highs[id]|0;   // hver session starter på 0
+    beep(740,0.1); state=id;
+    if(id==='pong') initPong();
+    else if(id==='breakout') initBreakout();
+    else if(id==='invaders') initInvaders();
+    else if(id==='asteroids') initAsteroids();
+    else if(id==='snake') initSnake();
+  }
+  function back(){ if(GAMES.includes(state)){ beep(420,0.1,'sine',0.12); enterMenu(); } }
+  function clearGames(){
+    setNight(false); stormTarget=0; stormWait=0;
+    hideShield(); ballGlow=null; ballFlare=0;
+    if(ball){ gameRig.remove(ball); ball=null; }
+    if(aiPaddle){ gameRig.remove(aiPaddle); aiPaddle=null; }
+    bricks.forEach(b=>{ gameRig.remove(b); b.material.dispose(); }); bricks=[];
+    invaders.forEach(e=>{ if(e.holder) gameRig.remove(e.holder); }); invaders=[];   // 3D cloud-rigs deler geometri/materiale → bare fjern
+    rocks.forEach(c=>{ if(c.root) gameRig.remove(c.root); }); rocks=[];               // Blå Himmel-skyer deler geo/mat → bare fjern roden
+    bullets.forEach(b=>{ b.on=false; b.m.visible=false; });
+    if(snakeMesh){ snakeMesh.visible=false; snakeMesh.count=0; }
+    if(foodMesh) foodMesh.visible=false;
+    kiteTail.visible=true;
+    if(kite) kite.scale.setScalar(1);                                                 // nulstil drage-størrelse (Blå Himmel skrumper den)
+  }
+  function recenter(){ if(activeController){ activeController.getWorldQuaternion(neutralQuat); } kiteLocal.set(0,0); aimDir.set(0,1); }
+
+  // ── PONG (adaptiv modstander: let → mellem → svær) ──
+  function pongLevel(){ return pongTime>240 ? 2 : pongTime>120 ? 1 : 0; }
+  function initPong(){
+    pongTime=0; pongLost=0; pongTier=-1;
+    ball=new THREE.Mesh(G_BALL, new THREE.MeshLambertMaterial({ color:0xffffff, emissive:0x88aaff, emissiveIntensity:0.5 }));
+    ball.position.set(0,0,OBJ_Z); gameRig.add(ball);
+    ballGlow=attachGlow(ball,0.2); ballFlare=0;
+    aiPaddle=new THREE.Mesh(G_BOX, new THREE.MeshLambertMaterial({ color:0x9be870, emissive:0x335, emissiveIntensity:0.4 }));
+    aiPaddle.scale.set(0.06,0.36,1); aiPaddle.position.set(0.92,0,OBJ_Z); gameRig.add(aiPaddle);
+    resetBall();
+    prompt('⚡ Grib bolden med skjoldet!'); setTimeout(()=>{ if(state==='pong') prompt(''); },2200);
+  }
+  function updatePong(dt){
+    kiteLocal.x += (-0.92 - kiteLocal.x)*Math.min(1,dt*12);
+    pongTime+=dt; const tier=pongLevel();
+    if(tier!==pongTier){ pongTier=tier;
+      aiPaddle.material.color.setHex([0x9be870,0xffd166,0xff7aa2][tier]);   // grøn → gul → rød
+      setShield(0.07, [0.27,0.22,0.19][tier]);   // skjoldet matcher ALTID den ægte rækkevidde
+      if(tier>0){ beep(660,0.07); setTimeout(()=>beep(990,0.08),90);
+        prompt(tier===1 ? '⚡ Lidt hurtigere!' : '🔥 Fuld fart!');
+        setTimeout(()=>{ if(state==='pong') prompt(''); },1800); } }
+    ball.position.x += ballV.x*dt; ball.position.y += ballV.y*dt;
+    if(ball.position.y> 0.95){ ball.position.y=0.95; ballV.y=-Math.abs(ballV.y); }
+    if(ball.position.y<-0.95){ ball.position.y=-0.95; ballV.y= Math.abs(ballV.y); }
+    // AI: tracking-styrke, max-fart og "wobble"-fejl skalerer med tier
+    const aiK=[0.55,1.3,2.3][tier], aiMax=[0.28,0.5,0.85][tier];
+    const wob=[0.17,0.06,0.015][tier]*Math.sin(clock.elapsedTime*1.8);
+    aiPaddle.position.y += THREE.MathUtils.clamp((ball.position.y+wob-aiPaddle.position.y)*aiK, -aiMax, aiMax)*dt;
+    aiPaddle.position.y = THREE.MathUtils.clamp(aiPaddle.position.y,-0.78,0.78);
+    if(ball.position.x>0.86 && ballV.x>0){ if(Math.abs(ball.position.y-aiPaddle.position.y)<0.22){ ballV.x=-Math.abs(ballV.x); ballV.y+=(ball.position.y-aiPaddle.position.y)*0.8; flareBall(0.3); beep(520,0.05); } }
+    const reach=[0.27,0.22,0.19][tier];   // ekstra hjælp til barnet på let
+    if(ball.position.x<-0.86 && ballV.x<0){ if(Math.abs(ball.position.y-kiteLocal.y)<reach){ ballV.x=Math.abs(ballV.x); ballV.y+=(ball.position.y-kiteLocal.y)*0.9;
+      shieldHit(0.058, ball.position.y-kiteLocal.y); flareBall(0.6);   // ripple PRÆCIS hvor bolden ramte
+      popAt(-0.86,ball.position.y,0x88ff88,6); beep(680,0.06); } }
+    if(ball.position.x>1.05){ addScore(1+tier); popAt(0.98,ball.position.y,0x9be870,10);
+      beep(760,0.07); setTimeout(()=>beep(1020,0.08),90); resetBall(); }
+    if(ball.position.x<-1.08){ pongLost++;
+      if(pongLost>=3){ pongLost=0; pongTime=0;   // 3 mål imod → tilbage til let
+        prompt('💙 Vi tager den med ro igen'); setTimeout(()=>{ if(state==='pong') prompt(''); },1800);
+        beep(420,0.1); setTimeout(()=>beep(560,0.1),130); }
+      resetBall(); }
+    capV([0.7,0.9,1.1][tier]);
+  }
+  function resetBall(){ const s=[0.5,0.62,0.78][pongLevel()];
+    ball.position.set(0,(Math.random()*0.6-0.3),OBJ_Z); ballV.set(s*(Math.random()>.5?1:-1),(Math.random()*0.5-0.25));
+    flareBall(1); }   // gylden "afsendt"-effekt ved serv
+
+  // ── MURSTEN (6 baner + guld-sten) ──
+  const BK_LVLS=[
+    ['11111','11111','11111'],
+    ['00100','01110','11111','11111'],
+    ['10101','01010','10101','01010'],
+    ['01110','11011','01110'],
+    ['11111','10001','10001','11111'],
+    ['11011','00100','11011','01110']
+  ];
+  function initBreakout(){
+    bkLvl=0;
+    ball=new THREE.Mesh(G_BALL, new THREE.MeshLambertMaterial({ color:0xffffff, emissive:0xffd166, emissiveIntensity:0.5 }));
+    ball.position.set(0,-0.4,OBJ_Z); gameRig.add(ball); ballV.set(0.45,0.6);
+    ballGlow=attachGlow(ball,0.2); ballFlare=0; flareBall(1);
+    setShield(0.22,0.07);
+    makeBricks();
+    prompt('⚡ Skjoldet er dit bat!'); setTimeout(()=>{ if(state==='breakout') prompt(''); },2200);
+  }
+  function makeBricks(){
+    bricks.forEach(b=>{ gameRig.remove(b); b.material.dispose(); }); bricks=[];
+    const cols=['#ff7aa2','#ffd166','#9be870','#6ec6ff','#c4a7ff'];
+    const map=BK_LVLS[bkLvl%BK_LVLS.length];
+    map.forEach((row,r)=>{ [...row].forEach((ch,cIdx)=>{ if(ch==='0') return;
+      const m=new THREE.Mesh(G_BOX, new THREE.MeshLambertMaterial({ color:new THREE.Color(cols[(r+cIdx)%5]), emissive:0x222, emissiveIntensity:0.3 }));
+      m.scale.set(0.3,0.12,1); m.position.set(-0.7+cIdx*0.35, 0.82-r*0.16, OBJ_Z);
+      m.userData={ hp:1 }; gameRig.add(m); bricks.push(m); }); });
+    for(let k=0;k<2 && bricks.length>4;k++){ const b=bricks[(Math.random()*bricks.length)|0];   // 2 guld-sten: 2 liv, 5 point
+      b.userData={ hp:2, gold:true }; b.material.color.set('#ffd166'); b.material.emissive.setHex(0x553300); b.material.emissiveIntensity=0.55; }
+  }
+  function updateBreakout(dt){
+    kiteLocal.y += (-0.9 - kiteLocal.y)*Math.min(1,dt*12);
+    ball.position.x += ballV.x*dt; ball.position.y += ballV.y*dt;
+    if(ball.position.x> 0.95){ ball.position.x=0.95; ballV.x=-Math.abs(ballV.x); }
+    if(ball.position.x<-0.95){ ball.position.x=-0.95; ballV.x= Math.abs(ballV.x); }
+    if(ball.position.y> 0.95){ ball.position.y=0.95; ballV.y=-Math.abs(ballV.y); }
+    if(ball.position.y<-0.84 && ballV.y<0 && Math.abs(ball.position.x-kiteLocal.x)<0.22){ ballV.y=Math.abs(ballV.y); ballV.x+=(ball.position.x-kiteLocal.x)*0.9;
+      shieldHit(ball.position.x-kiteLocal.x, 0.058); flareBall(0.6); beep(620,0.05); }
+    if(ball.position.y<-1.05){ ball.position.set(0,-0.4,OBJ_Z); ballV.set((0.45+0.04*Math.min(bkLvl,6))*(Math.random()>.5?1:-1),0.6); flareBall(1); }
+    for(let i=bricks.length-1;i>=0;i--){ const b=bricks[i];
+      if(Math.abs(ball.position.x-b.position.x)<0.17 && Math.abs(ball.position.y-b.position.y)<0.08){
+        ballV.y=-ballV.y; b.userData.hp--; flareBall(0.3);
+        if(b.userData.hp<=0){ popAt(b.position.x,b.position.y, b.material.color.getHex(), 8);
+          gameRig.remove(b); b.material.dispose(); bricks.splice(i,1);
+          addScore(b.userData.gold?5:2); beep(b.userData.gold?980:780,0.05); }
+        else { b.material.color.set('#ffe9a8'); popAt(b.position.x,b.position.y,0xffd166,3); beep(880,0.04); }
+        break; }
+    }
+    if(bricks.length===0){ bkLvl++; addScore(5);
+      prompt('🌟 Bane '+(bkLvl+1)+'!'); setTimeout(()=>{ if(state==='breakout') prompt(''); },1600);
+      beep(660,0.08); setTimeout(()=>beep(880,0.1),110); setTimeout(()=>beep(1175,0.14),220);
+      ball.position.set(0,-0.4,OBJ_Z); ballV.set((0.45+0.04*Math.min(bkLvl,6))*(Math.random()>.5?1:-1),0.62); flareBall(1);
+      makeBricks(); }
+    capV(1.0+0.05*Math.min(bkLvl,6));
+  }
+
+  // ════════ TORDENSKY: 3D kawaii cloud-rig (delt geometri/materiale, 1 sæt for alle fjender) ════════
+  function cloudShared(){
+    if(CG) return CG;
+    const bs=new THREE.Shape();                                   // 2D lyn → ekstruderet bolt
+    bs.moveTo(0,0.07); bs.lineTo(0.022,0.0); bs.lineTo(0.006,0.0);
+    bs.lineTo(0.026,-0.055); bs.lineTo(-0.01,0.022); bs.lineTo(0.012,0.022); bs.closePath();
+    const bolt=new THREE.ExtrudeGeometry(bs,{depth:0.012,bevelEnabled:false}); bolt.center();
+    CG={
+      puff:new THREE.SphereGeometry(1,10,10),
+      eyeW:new THREE.SphereGeometry(0.016,10,10),
+      eyeP:new THREE.SphereGeometry(0.011,8,8),
+      eyeH:new THREE.SphereGeometry(0.004,6,6),
+      drop:new THREE.CapsuleGeometry(0.003,0.02,3,5),
+      bolt,
+      mCloud:new THREE.MeshLambertMaterial({ color:0x27272a, emissive:0x18181b }),
+      mBolt :new THREE.MeshStandardMaterial({ color:0xfde047, emissive:0xfde047, emissiveIntensity:0.85, roughness:0.3, toneMapped:false }),
+      mW:new THREE.MeshLambertMaterial({ color:0xffffff }),
+      mP:new THREE.MeshBasicMaterial({ color:0x111111 }),
+      mH:new THREE.MeshBasicMaterial({ color:0xffffff }),
+      mR:new THREE.MeshBasicMaterial({ color:0x38bdf8, transparent:true, opacity:0.6 })
+    };
+    return CG;
+  }
+  function makeCloud(){
+    const g=cloudShared(), root=new THREE.Group(), body=new THREE.Group(); root.add(body);
+    CLOUD_PUFFS.forEach(p=>{ const m=new THREE.Mesh(g.puff,g.mCloud); m.position.set(p.x,p.y,p.z);
+      m.scale.set(p.s,p.s*0.8,p.s); m.userData.bp=new THREE.Vector3(p.x,p.y,p.z); m.userData.bs=p.s; body.add(m); });
+    const bolts=[]; CLOUD_HORNS.forEach(h=>{ const m=new THREE.Mesh(g.bolt,g.mBolt); m.position.set(h.x,h.y,0); m.rotation.z=h.rz; body.add(m); bolts.push(m); });
+    const eye=rx=>{ const e=new THREE.Group();
+      e.add(new THREE.Mesh(g.eyeW,g.mW));                                // 0 sclera
+      const p=new THREE.Mesh(g.eyeP,g.mP); p.scale.y=1.3; p.position.z=0.012; e.add(p);   // 1 kawaii-pupil
+      const h=new THREE.Mesh(g.eyeH,g.mH); h.position.set(0.004,0.004,0.016); e.add(h);   // 2 glimt
+      e.position.set(rx,0.04,0.14); return e; };
+    const eyeL=eye(-0.06), eyeR=eye(0.06); root.add(eyeL,eyeR);
+    const rain=[]; for(let i=0;i<4;i++){ const d=new THREE.Mesh(g.drop,g.mR);
+      d.position.set((Math.random()-0.5)*0.28,-0.05-Math.random()*0.18,(Math.random()-0.5)*0.08); d.userData.sp=0.3+Math.random()*0.4; root.add(d); rain.push(d); }
+    const atk=new THREE.Mesh(g.bolt,g.mBolt); atk.scale.setScalar(1.5); atk.position.set(0,-0.12,0); atk.visible=false; root.add(atk);   // overload-lyn
+    return { root, body, eyeL, eyeR, rain, bolts, bolt:atk };
+  }
+  function resetCloud(r){
+    r.root.position.set(0,0,0); r.root.rotation.set(0,0,0); r.root.scale.set(1,1,1);
+    r.body.position.set(0,0,0); r.body.rotation.set(0,0,0); r.body.scale.set(1,1,1);
+    r.body.children.forEach(c=>{ if(c.userData.bp){ c.position.copy(c.userData.bp); c.scale.set(c.userData.bs,c.userData.bs*0.8,c.userData.bs); } });
+    r.bolts.forEach(b=>{ b.scale.set(1,1,1); b.visible=true; });
+    [[r.eyeL,-0.06],[r.eyeR,0.06]].forEach(([e,x])=>{ e.position.set(x,0.04,0.14); e.rotation.set(0,0,0); e.scale.set(1,1,1);
+      e.children.forEach(c=>c.visible=true); e.children[1].scale.set(1,1.3,1); });
+    r.bolt.visible=false; r.bolt.scale.setScalar(1.5);
+    r.rain.forEach(d=>d.visible=true);
+  }
+  function happyEyes(r){ r.eyeL.scale.y=0.18; r.eyeR.scale.y=0.18; r.eyeL.rotation.z=0.25; r.eyeR.rotation.z=-0.25; }   // ^_^
+  // Død/score-reaktion drevet af progress p∈[0,1]. 'pop'=Quick Happy Pop · 'flutter'/'overload'=randomiseret score-reaktion
+  function deathPose(r,type,p){
+    p=Math.min(1,p); r.rain.forEach(d=>d.visible=false);
+    if(type==='overload'){                                        // ryster, lyn vokser, forsvinder
+      if(p<0.5){ r.root.position.x=Math.sin(p*70)*0.05; r.bolt.visible=true; r.bolt.scale.setScalar(1.5+p*16); happyEyes(r); }
+      else r.root.scale.setScalar(Math.max(0.001,1-(p-0.5)/0.5));
+      return;
+    }
+    if(type==='flutter'){                                         // Yoshi-hop, så poof
+      const j=Math.max(0,Math.sin(p*Math.PI*3)); r.root.position.y=j*0.18; if(j>0.1) r.body.rotation.x=-0.25; happyEyes(r);
+      if(p>0.65) r.root.scale.setScalar(Math.max(0.001,1-(p-0.65)/0.35));
+      return;
+    }
+    if(p<0.22){ r.body.scale.setScalar(1+(p/0.22)*0.5); happyEyes(r); }            // anticipation
+    else { const q=(p-0.22)/0.78;                                                  // glad eksplosion
+      r.body.children.forEach(c=>{ if(c.userData.bp){ c.position.set(c.userData.bp.x*(1+q*12),c.userData.bp.y*(1+q*12),c.userData.bp.z*(1+q*12)); c.scale.setScalar(Math.max(0,c.userData.bs*(1-q))); } });
+      r.bolts.forEach(b=>b.visible=false); const s=Math.max(0.001,1-q); r.eyeL.scale.setScalar(s); r.eyeR.scale.setScalar(s); }
+  }
+
+  // ── TORDENSKYER (klassisk Space-Invaders: spawn øverst → march + trin ned · hurtigere når der er færre/højere bølge · jorden = game over) ──
+  function initInvaders(){
+    setNight(false); cloudShared(); waveN=0; makeWave();
+    prompt('🌩️ Skyd skyerne, før de når jorden!'); setTimeout(()=>{ if(state==='invaders') prompt(''); },2400);
+  }
+  function makeWave(){
+    invaders.forEach(e=>{ if(e.holder) gameRig.remove(e.holder); }); invaders=[];
+    const rows=Math.min(3,2+Math.floor(waveN/3)), cols=Math.min(5,3+Math.floor(waveN/2));   // vokser blidt pr. bølge
+    igDir=1; igX=0; igY=0; igSpd=0.13+waveN*0.022; igTotal=rows*cols;                          // hurtigere pr. bølge (blødere ramp)
+    const dx=0.32, x0=-(cols-1)*dx/2;
+    for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+      const rig=makeCloud(), holder=new THREE.Group(); holder.add(rig.root); holder.scale.setScalar(0.7);
+      const bx=x0+c*dx, by=0.95-r*0.26; holder.position.set(bx,by,OBJ_Z); gameRig.add(holder);
+      invaders.push({ holder, rig, bx, by, dying:false, deathT:0, deathDur:0.75, deathType:'pop', phase:Math.random()*6, lookT:0, lookDur:1.2 });
+    }
+  }
+  function hitEnemy(e,ex,ey){
+    e.dying=true; e.deathT=0; const r=Math.random();                                          // Shot/Death=pop · Score=flutter/overload
+    e.deathType = r<0.55 ? 'pop' : r<0.78 ? 'flutter' : 'overload';
+    beep(950,0.05,'square',0.08); popAt(ex,ey,0xfff3b0,8);
+  }
+  function invadersOver(){
+    beep(190,0.2,'sine',0.16); setTimeout(()=>beep(150,0.26,'sine',0.14),150);
+    popAt(0,igFloorY,0xff6b6b,18); prompt('💙 Åh nej! Vi starter forfra');
+    setTimeout(()=>{ if(state==='invaders') prompt(''); },1900);
+    bullets.forEach(b=>{ b.on=false; b.m.visible=false; });
+    score=0; lastScore=-1; waveN=0; makeWave();                                                // auto-restart på let
+  }
+  function updateInvaders(dt){
+    kiteLocal.y += (-0.9 - kiteLocal.y)*Math.min(1,dt*12);                                      // spilleren holdes nederst (sigter sidelæns)
+    const t=clock.elapsedTime; camera.getWorldPosition(_cam);
+    let alive=0; for(const e of invaders) if(!e.dying) alive++;
+    const sf = 1 + (igTotal-alive)/Math.max(1,igTotal)*0.9;                                     // klassisk: færre fjender → hurtigere (mildere)
+    igX += igDir*igSpd*sf*dt;
+    if(igX> 0.24){ igX=0.24; igDir=-1; igY-=0.085; }                                              // ramt kant → vend + trin ned
+    else if(igX<-0.24){ igX=-0.24; igDir=1; igY-=0.085; }
+
+    let over=false;
+    for(const e of invaders){
+      const ex=e.bx+igX, ey=e.by+igY;
+      e.holder.position.set(ex,ey,OBJ_Z); e.holder.lookAt(_cam);                                // billboard mod spilleren
+      if(e.dying){ resetCloud(e.rig); deathPose(e.rig,e.deathType,e.deathT/e.deathDur); if((e.deathT+=dt)>=e.deathDur) e._dead=true; continue; }
+      if(ey<=igFloorY) over=true;                                                               // nået jorden
+      resetCloud(e.rig);
+      e.rig.root.position.y += Math.sin(t*3+e.phase)*0.015;                                      // blid svæven
+      e.rig.rain.forEach(d=>{ d.position.y-=d.userData.sp*dt; if(d.position.y<-0.3){ d.position.y=-0.02; d.position.x=(Math.random()-0.5)*0.28; } });  // regn
+      e.rig.bolts.forEach(b=>b.scale.setScalar(0.85+Math.random()*0.3));                         // flimrende lyn
+      if(e.lookT>0){ e.lookT-=dt; const k=Math.sin((1-e.lookT/e.lookDur)*Math.PI*2);             // sjælden "kig til siden"
+        e.rig.root.rotation.y=k*0.5; e.rig.eyeL.rotation.y=k*0.3; e.rig.eyeR.rotation.y=k*0.3; }
+      else if(Math.random()<dt*0.05){ e.lookT=e.lookDur=1.2; }
+    }
+
+    for(const b of bullets){ if(!b.on) continue; b.m.position.x+=b.vx*dt; b.m.position.y+=b.vy*dt; b.age+=dt;
+      if(b.m.position.y>1.05||b.age>3){ b.on=false; b.m.visible=false; continue; }
+      for(const e of invaders){ if(e.dying) continue; const ex=e.bx+igX, ey=e.by+igY;
+        if(Math.abs(b.m.position.x-ex)<0.13 && Math.abs(b.m.position.y-ey)<0.13){ b.on=false; b.m.visible=false; hitEnemy(e,ex,ey); addScore(3); break; } }
+    }
+
+    for(let i=invaders.length-1;i>=0;i--) if(invaders[i]._dead){ gameRig.remove(invaders[i].holder); invaders.splice(i,1); }
+
+    if(over){ invadersOver(); return; }
+    if(invaders.length===0){ waveN++; addScore(5); prompt('🌩️ Bølge '+(waveN+1)+'!');
+      setTimeout(()=>{ if(state==='invaders') prompt(''); },1500); beep(740,0.08); setTimeout(()=>beep(990,0.1),100); makeWave(); }
+  }
+
+  // ════════ BLÅ HIMMEL — klassisk Asteroids m. søde sky-væsner (Quest 3-venlig) ════════
+  // 3 størrelser: STOR (boss) → MELLEM (chok) → LILLE (svimmel). Skyd stor → 2 mellem → 2 små → poof.
+  // Mindre = hurtigere. Hver bølge: flere + hurtigere (start let). Mange skyer = mørk grå himmel;
+  // ryd dem og himlen bliver klar blå (skifter dynamisk). KUN store bærer lys: indre torden-kerne
+  // (lime PointLight) der blinker — billigt for Quest 3. Krop = 3D-puffs, ansigt = skarp canvas-decal.
+  const SKY_PUFFS = {
+    2:[{x:0,y:.16,s:.7},{x:-.5,y:-.02,s:.6},{x:.5,y:0,s:.58},{x:-.92,y:.08,s:.4},{x:.88,y:.1,s:.42}],
+    1:[{x:0,y:.14,s:.62},{x:-.42,y:-.02,s:.54},{x:.44,y:0,s:.5}],
+    0:[{x:-.22,y:0,s:.6},{x:.3,y:.06,s:.5}]
+  };
+  const SKY_SIZE=[.10,.17,.26], SKY_TM=[2.0,1.5,1.0], SKY_FACE=['round','shocked','boss'];
+
+  function skyFaceTex(expr){
+    const c=document.createElement('canvas'); c.width=c.height=256; const x=c.getContext('2d');
+    const cx=128, ex=54, cy=124, Rr=46; x.lineCap='round'; x.lineJoin='round';
+    const eye=(px,mir)=>{
+      if(expr==='happy'){ x.strokeStyle='#0b1224'; x.lineWidth=17; x.beginPath(); x.arc(px,cy+8,30,Math.PI*1.15,Math.PI*1.85); x.stroke(); return; }
+      if(expr==='dizzy'){ x.strokeStyle='#0b1224'; x.lineWidth=9; x.beginPath();
+        for(let a=0;a<Math.PI*4;a+=0.25){ const r=3+a*4.3, xx=px+Math.cos(a*(mir?-1:1))*r, yy=cy+Math.sin(a)*r; a?x.lineTo(xx,yy):x.moveTo(xx,yy);} x.stroke(); return; }
+      x.fillStyle='#fff'; x.beginPath(); x.ellipse(px,cy,Rr,Rr*1.08,0,0,TAU); x.fill();
+      const ps=expr==='shocked'?.4:.6, pr=Rr*ps, oy=expr==='shocked'?0:6;
+      x.fillStyle='#0b1224'; x.beginPath(); x.arc(px,cy+oy,pr,0,TAU); x.fill();
+      x.fillStyle='#fff'; x.beginPath(); x.arc(px-pr*.34,cy+oy-pr*.34,pr*.32,0,TAU); x.fill();
+    };
+    eye(cx-ex,1); eye(cx+ex,0);
+    x.strokeStyle='#0b1224';
+    if(expr==='boss'){ x.lineWidth=15;                                            // sure, søde øjenbryn \\ /
+      x.beginPath(); x.moveTo(cx-ex-32,cy-48); x.lineTo(cx-ex+24,cy-30); x.stroke();
+      x.beginPath(); x.moveTo(cx+ex+32,cy-48); x.lineTo(cx+ex-24,cy-30); x.stroke(); }
+    if(expr==='shocked'){ x.lineWidth=12;                                          // høje overraskede bryn
+      x.beginPath(); x.arc(cx-ex,cy-54,21,Math.PI*1.12,Math.PI*1.88); x.stroke();
+      x.beginPath(); x.arc(cx+ex,cy-54,21,Math.PI*1.12,Math.PI*1.88); x.stroke(); }
+    if(expr==='happy'||expr==='dizzy'||expr==='round'){ x.fillStyle='rgba(255,120,150,.45)';        // røde kinder
+      x.beginPath(); x.arc(cx-ex-12,cy+46,15,0,TAU); x.fill();
+      x.beginPath(); x.arc(cx+ex+12,cy+46,15,0,TAU); x.fill(); }
+    const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+  }
+
+  function skyShared(){
+    if(SG) return SG;
+    const fm={}; ['boss','shocked','round','happy'].forEach(e=>{ fm[e]=new THREE.MeshBasicMaterial({ map:skyFaceTex(e), transparent:true, depthWrite:false, toneMapped:false }); });
+    SG={ puff:new THREE.SphereGeometry(1,12,10), faceGeo:new THREE.PlaneGeometry(1,1),
+         matCloud:new THREE.MeshLambertMaterial({ color:0x33415f, emissive:0x0e1626, emissiveIntensity:1.0 }),
+         faceMat:fm };
+    return SG;
+  }
+
+  function spawnCloud(x,y,vx,vy,tier){
+    const g=skyShared(), root=new THREE.Group(), size=SKY_SIZE[tier], puffs=[];
+    SKY_PUFFS[tier].forEach(p=>{ const m=new THREE.Mesh(g.puff,g.matCloud);
+      m.position.set(p.x*size,p.y*size,0); m.scale.set(p.s*size,p.s*size*.82,p.s*size);
+      m.userData.bp=m.position.clone(); m.userData.bs=m.scale.clone(); root.add(m); puffs.push(m); });
+    const fs=size*1.75, face=new THREE.Mesh(g.faceGeo, g.faceMat[SKY_FACE[tier]]);
+    face.scale.set(fs,fs,1); face.position.set(0,size*.06,size*.95); root.add(face);
+    let light=null;
+    if(tier===2){ light=new THREE.PointLight(0xa3e635,0,size*5,2); light.position.set(0,0,size*.3); root.add(light); }  // KUN store: torden-kerne
+    root.position.set(x,y,OBJ_Z); root.scale.setScalar(.3); gameRig.add(root);
+    rocks.push({ root,tier,size,fs,vx,vy,light,puffs,face,bob:Math.random()*TAU,birth:0,blink:2+Math.random()*3,blinkT:0,flashT:0,dying:false,deathT:0 });
+  }
+
+  function spawnWave(){
+    skyWave++;
+    const n=Math.min(3+skyWave,5), bs=0.10+skyWave*0.02;     // bølge 1 = 4 langsomme · vokser i antal+fart
+    for(let i=0;i<n;i++){ const e=Math.random()*TAU, a=Math.random()*TAU;
+      spawnCloud(Math.cos(e)*1.05, Math.sin(e)*.92, Math.cos(a)*bs, Math.sin(a)*bs, 2); }
+  }
+
+  function initAsteroids(){
+    setNight(false); stormWait=0; rocks=[]; skyWave=0; skyShared();
+    if(kite) kite.scale.setScalar(0.6);                       // mindre drage → større arena
+    spawnWave();
+    prompt('🌧️ Pust uvejret væk!'); setTimeout(()=>{ if(state==='asteroids') prompt(''); },2300);
+  }
+
+  function hitCloud(c,i){
+    addScore([5,3,2][c.tier]);                                // klassisk: lille = flest point
+    if(c.tier>0){                                             // stor/mellem → splittes i to mindre
+      popAt(c.root.position.x,c.root.position.y,0xb9c8e6,8);
+      const ch=c.tier-1, base=(0.12+skyWave*0.02)*SKY_TM[ch], px=c.root.position.x, py=c.root.position.y, a0=Math.atan2(c.vy,c.vx);
+      for(let k=0;k<2;k++){ const a=a0+(k?0.8:-0.8)+(Math.random()-0.5)*0.5;
+        spawnCloud(px+(Math.random()-0.5)*0.08, py+(Math.random()-0.5)*0.08, Math.cos(a)*base, Math.sin(a)*base, ch); }
+      splitSound(); removeCloud(c,i);
+    } else {                                                  // lille → glad poof
+      c.dying=true; c.deathT=0; c.face.material=SG.faceMat.happy;
+      popAt(c.root.position.x,c.root.position.y,0xa3e635,10); popSound();
+    }
+  }
+
+  function deathPoof(c,dt){
+    c.deathT=Math.min(1,c.deathT+dt/0.42); const q=c.deathT;
+    c.puffs.forEach(p=>{ const bp=p.userData.bp, bs=p.userData.bs;
+      p.position.set(bp.x*(1+q*2.4), bp.y*(1+q*2.4)+q*0.06, bp.z);
+      p.scale.set(bs.x*(1-q),bs.y*(1-q),bs.z*(1-q)); });
+    c.face.scale.setScalar(c.fs*(1-q));
+  }
+  function removeCloud(c,i){ if(c.root) gameRig.remove(c.root); rocks.splice(i,1); }
+
+  function drip(x,y){ for(const p of parts){ if(p.on) continue;     // små regndråber fra de store skyer
+    p.on=true; p.age=0; p.life=0.7; p.base=0.012; p.v.set(0,-0.2,0);
+    _v.set(x,y,OBJ_Z); gameRig.localToWorld(_v); p.m.position.copy(_v);
+    p.m.visible=true; p.m.scale.setScalar(p.base); p.m.material.color.setHex(0x8ec9ff); p.m.material.opacity=0.9; return; } }
+
+  function updateAsteroids(dt){
+    const inp=getInput(); if(inp.lengthSq()>0.02) aimDir.lerp(_td.copy(inp).normalize(),0.2).normalize();
+    let mass=0; for(const c of rocks) if(!c.dying) mass+=(c.tier+1);   // sky-masse styrer himlens mørke
+    stormTarget=Math.min(1, mass/13);
+
+    for(let i=rocks.length-1;i>=0;i--){ const c=rocks[i];
+      if(c.dying){ deathPoof(c,dt); if(c.deathT>=1) removeCloud(c,i); continue; }
+      c.bob+=dt;
+      c.root.position.x+=c.vx*dt; c.root.position.y+=(c.vy+Math.sin(c.bob*1.2)*0.04)*dt;
+      if(c.root.position.x> 1.18) c.root.position.x=-1.18; else if(c.root.position.x<-1.18) c.root.position.x=1.18;  // wrap (asteroids-topologi)
+      if(c.root.position.y> 1.12) c.root.position.y=-1.12; else if(c.root.position.y<-1.12) c.root.position.y=1.12;
+      if(c.birth<1) c.birth=Math.min(1,c.birth+dt*5);                 // sød "pop ind"
+      const bz=0.3+0.7*c.birth*c.birth*(3-2*c.birth);
+      c.root.scale.setScalar(bz*(1+Math.sin(c.bob*2)*0.03));          // åndedræt
+      if(c.blinkT>0){ c.blinkT-=dt; if(c.blinkT<=0) c.face.scale.set(c.fs,c.fs,1); }   // blink
+      else { c.blink-=dt; if(c.blink<=0){ c.blink=2.5+Math.random()*3.5; c.blinkT=0.1; c.face.scale.set(c.fs,c.fs*0.12,1); } }
+      if(c.light){                                                    // KUN store: torden-kerne blinker lime
+        if(c.flashT>0){ c.flashT-=dt; c.light.intensity=Math.max(0,c.flashT/0.35)*3.4; }
+        else { c.light.intensity+=(0-c.light.intensity)*Math.min(1,dt*5);
+          if(Math.random()<dt*0.45){ c.flashT=0.35; rumble(); }
+          if(Math.random()<dt*0.7) drip(c.root.position.x+(Math.random()-0.5)*c.size, c.root.position.y-c.size*0.5); }
+      }
+    }
+
+    for(const b of bullets){ if(!b.on) continue; b.m.position.x+=b.vx*dt; b.m.position.y+=b.vy*dt; b.age+=dt;
+      if(Math.abs(b.m.position.x)>1.2||Math.abs(b.m.position.y)>1.2||b.age>2){ b.on=false; b.m.visible=false; continue; }
+      for(let i=rocks.length-1;i>=0;i--){ const c=rocks[i]; if(c.dying) continue;
+        if(Math.hypot(b.m.position.x-c.root.position.x, b.m.position.y-c.root.position.y) < c.size+0.05){ b.on=false; b.m.visible=false; hitCloud(c,i); break; } }
+    }
+
+    let alive=0; for(const c of rocks) if(!c.dying) alive++;
+    if(alive===0){
+      if(stormWait<=0){ stormWait=3.5; addScore(10); prompt('☀️ Klar blå himmel! +10'); popAt(0,0.3,0xffd166,18); skyClearChime(); }
+      stormWait-=dt;
+      if(stormWait<=0){ stormWait=0; prompt(''); spawnWave(); }     // nyt uvejr ruller ind (sværere)
+    }
+  }
+
+  // ── SLANGE (dragon-snake) ──
+  function initSnake(){
+    setNight(false); kiteTail.visible=false;               // the long body IS the tail now
+    snakeLen=SNAKE_START; snakeTarget=SNAKE_START; snakeInvuln=1.0;
+    aimDir.set(0,1); kiteLocal.set(0,-0.2);
+    snakeBody=[]; for(let i=0;i<SNAKE_MAX;i++) snakeBody.push(new THREE.Vector2(kiteLocal.x, kiteLocal.y - i*SEG_GAP));
+    for(let i=1;i<SNAKE_MAX;i++){ _col.setHSL((i*0.045)%1, 0.7, 0.62); snakeMesh.setColorAt(i-1, _col); } // rainbow body
+    snakeMesh.instanceColor.needsUpdate=true; snakeMesh.count=0; snakeMesh.visible=true;
+    spawnFood();
+  }
+  function spawnFood(){
+    let x,y,tr=0; do{ x=(Math.random()*2-1)*0.8; y=(Math.random()*2-1)*0.8; tr++; }
+    while(Math.hypot(x-kiteLocal.x,y-kiteLocal.y)<0.3 && tr<20);
+    foodPos.set(x,y);
+    if(!foodMesh){   // lille heliumballon: samme kugle/farve/effekt — nu med knude + snor
+      foodMesh=new THREE.Group();
+      foodMesh.add(new THREE.Mesh(G_BALL, new THREE.MeshLambertMaterial({ color:0xff5470, emissive:0xff2d55, emissiveIntensity:0.6 })));
+      const knot=new THREE.Mesh(new THREE.ConeGeometry(0.014,0.02,6), new THREE.MeshLambertMaterial({ color:0xff7a93, emissive:0x551122, emissiveIntensity:0.3 }));
+      knot.position.y=-0.057; knot.rotation.x=Math.PI; foodMesh.add(knot);
+      const pts=[]; for(let i=0;i<=8;i++){ const f=i/8; pts.push(new THREE.Vector3(Math.sin(f*Math.PI*1.3)*0.014, -0.066-f*0.085, 0)); }
+      foodMesh.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.75 })));
+      gameRig.add(foodMesh);
+    }
+    foodMesh.visible=true; foodMesh.position.set(x,y,KITE_Z);
+  }
+  function snakeHit(){
+    beep(200,0.18,'sine',0.16); popAt(kiteLocal.x,kiteLocal.y,0xff3344,16);
+    snakeLen=SNAKE_START; snakeTarget=SNAKE_START; snakeInvuln=1.2;
+    kiteLocal.set(0,-0.2); aimDir.set(0,1);
+    for(let i=0;i<SNAKE_MAX;i++) snakeBody[i].set(kiteLocal.x, kiteLocal.y - i*SEG_GAP);
+  }
+  function updateSnake(dt){
+    if(snakeInvuln>0) snakeInvuln-=dt;
+    const inp=getInput();
+    if(inp.lengthSq()>0.03){ _td.copy(inp).normalize(); aimDir.lerp(_td, Math.min(1,dt*5)); if(aimDir.lengthSq()>0) aimDir.normalize(); }
+    kiteLocal.x += aimDir.x*SNAKE_SPEED*dt; kiteLocal.y += aimDir.y*SNAKE_SPEED*dt;
+    if(kiteLocal.x> PW){ kiteLocal.x= PW; aimDir.x=-Math.abs(aimDir.x); }
+    if(kiteLocal.x<-PW){ kiteLocal.x=-PW; aimDir.x= Math.abs(aimDir.x); }
+    if(kiteLocal.y> PH){ kiteLocal.y= PH; aimDir.y=-Math.abs(aimDir.y); }
+    if(kiteLocal.y<-PH){ kiteLocal.y=-PH; aimDir.y= Math.abs(aimDir.y); }
+    snakeBody[0].set(kiteLocal.x, kiteLocal.y);
+    for(let i=1;i<snakeLen;i++){ const a=snakeBody[i-1], b=snakeBody[i];
+      _tv.set(a.x-b.x, a.y-b.y); const d=_tv.length();
+      if(d>SEG_GAP){ const k=(d-SEG_GAP)/d; b.x+=_tv.x*k; b.y+=_tv.y*k; } }
+    let n=0;
+    for(let i=1;i<snakeLen;i++){ const s=snakeBody[i], sc=0.05-0.03*(i/snakeLen);
+      _v.set(s.x,s.y,KITE_Z); _m.makeScale(sc,sc,sc); _m.setPosition(_v); snakeMesh.setMatrixAt(n++, _m); }
+    snakeMesh.count=n; snakeMesh.instanceMatrix.needsUpdate=true;
+    foodBob+=dt;
+    if(foodMesh){ foodMesh.position.set(foodPos.x, foodPos.y, KITE_Z+Math.sin(foodBob*3)*0.02);
+      foodMesh.rotation.y+=dt*1.6; foodMesh.rotation.z=Math.sin(foodBob*2.1)*0.13;   // snoren svajer som en rigtig ballon
+      foodMesh.scale.setScalar(1+Math.sin(foodBob*4)*0.12); }
+    if(Math.hypot(kiteLocal.x-foodPos.x, kiteLocal.y-foodPos.y)<0.09){
+      snakeTarget=Math.min(SNAKE_MAX, snakeTarget+SNAKE_GROW); addScore(2);
+      beep(740,0.06); beep(990,0.05,'sine',0.12); popAt(foodPos.x,foodPos.y,0xff5470,8); spawnFood(); }
+    if(snakeLen<snakeTarget){ const tl=snakeBody[snakeLen-1]; snakeBody[snakeLen].set(tl.x,tl.y); snakeLen++; }
+    if(snakeInvuln<=0){ for(let i=5;i<snakeLen;i++){ const s=snakeBody[i];
+      if(Math.hypot(kiteLocal.x-s.x, kiteLocal.y-s.y)<0.045){ snakeHit(); break; } } }
+    _v.set(kiteLocal.x,kiteLocal.y,KITE_Z); gameRig.localToWorld(_v); kite.position.copy(_v); orientKite(dt);
+  }
+
+  // ───────────────────────── shared helpers ─────────────────────────
+  function capV(mx){ const s=ballV.length(); if(s>mx) ballV.multiplyScalar(mx/s); if(s<0.35&&s>0) ballV.multiplyScalar(0.35/s); }
+  function addScore(n){ score+=n;
+    if(GAMES.includes(state) && score>(highs[state]|0)){
+      highs[state]=score; localStorage.setItem('nxtKiteHighs', JSON.stringify(highs));
+      if(!beatHigh && sessionPrevHigh>0 && score>sessionPrevHigh){ beatHigh=true;   // fejr ny rekord — én gang pr. session
+        prompt('🏆 Ny rekord!'); setTimeout(()=>{ if(GAMES.includes(state)) prompt(''); },1600);
+        beep(880,0.08); setTimeout(()=>beep(1175,0.1),100); popAt(kiteLocal.x,kiteLocal.y,0xffd166,12); } } }
+
+  function getInput(){
+    if(xrMode && activeController){
+      activeController.getWorldQuaternion(_q); _q.premultiply(neutralQuat.clone().invert());
+      _e.setFromQuaternion(_q,'YXZ');
+      const x = THREE.MathUtils.clamp(_e.y*GAIN*INVERT_YAW, -PW, PW);
+      const y = THREE.MathUtils.clamp(_e.x*GAIN*INVERT_PITCH, -PH, PH);
+      return _inp.set(x,y);
+    }
+    return _inp.set(-mNDC.x*PW, mNDC.y*PH);
+  }
+
+  function computeKite(dt){
+    const inp=getInput(); let tx=inp.x, ty=inp.y;
+    if(state==='pong'){ tx=-0.92; }
+    else if(state==='breakout'||state==='invaders'){ ty=-0.9; }
+    kiteLocal.x += (tx-kiteLocal.x)*Math.min(1,dt*9);
+    kiteLocal.y += (ty-kiteLocal.y)*Math.min(1,dt*9);
+    if(kiteShield && kiteShield.visible) kiteShield.position.set(kiteLocal.x, kiteLocal.y, SHIELD_Z);   // skjoldet følger dragen
+    _v.set(kiteLocal.x, kiteLocal.y, KITE_Z); gameRig.localToWorld(_v); kite.position.copy(_v);
+    orientKite(dt);
+  }
+  function orientKite(dt){
+    camera.getWorldPosition(_cam); kite.lookAt(_cam);
+    let roll;
+    if(state==='asteroids' || state==='snake'){ roll = -Math.atan2(aimDir.x, aimDir.y); }
+    else { roll = Math.sin(clock.elapsedTime*2)*0.06 - kiteLocal.x*0.15; }
+    kite.rotateZ(roll);
+    if(kiteTail.visible){ const t=clock.elapsedTime; kiteTail.children.forEach(b=>{ const i=b.userData.i;
+      b.position.x = Math.sin(t*3 + i*0.7)*0.04*(1+i*0.2) - kiteLocal.x*0.05*i; }); }
+    updateString();
+  }
+  function updateString(){
+    if(!xrMode || !activeController){ stringLine.visible=false; return; }
+    stringLine.visible=true; activeController.getWorldPosition(_v); kite.getWorldPosition(_v2);
+    const arr=stringLine.geometry.attributes.position.array, n=13;
+    for(let i=0;i<n;i++){ const f=i/(n-1);
+      const x=_v.x+(_v2.x-_v.x)*f, y=_v.y+(_v2.y-_v.y)*f - Math.sin(f*Math.PI)*0.12, z=_v.z+(_v2.z-_v.z)*f;
+      arr[i*3]=x; arr[i*3+1]=y; arr[i*3+2]=z; }
+    stringLine.geometry.attributes.position.needsUpdate=true;
+  }
+
+  function fire(){
+    if(state==='menu'){ let over=-1,bd=0.26; menuClouds.forEach((g,i)=>{ const d=Math.hypot(kiteLocal.x-g.position.x,kiteLocal.y-g.position.y); if(d<bd){bd=d;over=i;} });
+      if(over>=0) startGame(menuClouds[over].userData.id); return; }
+    if(state==='invaders'){ if(bullets.some(b=>b.on)) return;                                   // klassisk: ÉT skud ad gangen (ingen spam)
+      shoot(kiteLocal.x,kiteLocal.y, 0, 2.0); popAt(kiteLocal.x,kiteLocal.y+0.05,0xfff3b0,3); beep(900,0.04,'square',0.1); }
+    else if(state==='asteroids'){ shoot(kiteLocal.x,kiteLocal.y, aimDir.x*1.9, aimDir.y*1.9); shootSound(); }   // blød "pew" i sigte-retning
+  }
+  function shoot(x,y,vx,vy){ for(const b of bullets){ if(!b.on){ b.on=true; b.age=0; b.vx=vx; b.vy=vy; b.m.visible=true; b.m.position.set(x,y,OBJ_Z); return; } } }
+
+  function popAt(localX,localY,color,n){ _v.set(localX,localY,OBJ_Z); gameRig.localToWorld(_v); spawnBurst(_v,color,n); }
+  function burst(obj,n){ obj.getWorldPosition(_v); spawnBurst(_v,0x9be0ff,n,true); }
+  function spawnBurst(pos,color,n,confetti){
+    for(let k=0;k<n;k++){ let p=null; for(const q of parts){ if(!q.on){ p=q; break; } } if(!p) return;
+      p.on=true; p.age=0; p.life=confetti?1.5:0.8; p.base=confetti?0.02:0.018;
+      const sp=confetti?0.9:0.4; p.v.set((Math.random()-0.5)*sp,(Math.random()*(confetti?1:0.6)+0.1),(Math.random()-0.5)*sp);
+      p.m.visible=true; p.m.position.copy(pos); p.m.scale.setScalar(p.base);
+      p.m.material.color.setHex(confetti?[0x0ea5e9,0xff7aa2,0xffd166,0x9be870,0xffffff][k%5]:color); p.m.material.opacity=1;
+    }
+  }
+  function updateParts(dt){ for(const p of parts){ if(!p.on) continue; p.age+=dt;
+    if(p.age>p.life){ p.on=false; p.m.visible=false; continue; }
+    p.m.position.addScaledVector(p.v,dt); p.v.y-=0.9*dt; p.v.multiplyScalar(0.99);
+    p.m.material.opacity=1-p.age/p.life; p.m.scale.setScalar(p.base*Math.max(0.2,1-p.age/p.life*0.6)); } }
+
+  // ───────────────────────── clap ─────────────────────────
+  function checkClap(){ if(!xrMode || controllers.length<2){ clapStart=0; return; }
+    const a=controllers[0], b=controllers[1];
+    if(a.position.lengthSq()===0 && b.position.lengthSq()===0){ clapStart=0; return; }
+    if(a.position.distanceTo(b.position)<=CLAP_DIST){ if(!clapStart) clapStart=Date.now();
+      else if(Date.now()-clapStart>=CLAP_TIME){ endXR(); clapStart=0; } } else clapStart=0; }
+  function drawClapHUD(){ if(!clapHUD) return; clapHUD.visible = clapStart>0; if(!clapHUD.visible) return;
+    const {c,x,tex}=clapHUD.userData, W=1024,H=220,Rr=110; x.clearRect(0,0,W,H);
+    x.shadowColor='rgba(14,165,233,0.22)'; x.shadowBlur=28; x.shadowOffsetY=10;
+    x.fillStyle='rgba(255,255,255,0.92)'; roundRect(x,12,8,W-24,H-24,Rr); x.fill();
+    x.shadowColor='transparent'; x.shadowBlur=0; x.shadowOffsetY=0;
+    x.strokeStyle='rgba(255,255,255,0.9)'; x.lineWidth=2; roundRect(x,13,9,W-26,H-26,Rr-1); x.stroke();
+    const prog=Math.min(1,(Date.now()-clapStart)/CLAP_TIME), remain=Math.max(0,Math.ceil((CLAP_TIME-(Date.now()-clapStart))/1000));
+    x.fillStyle='#0f172a'; x.font='800 52px -apple-system,"SF Pro Rounded","Segoe UI",sans-serif'; x.textAlign='center'; x.textBaseline='middle';
+    x.fillText('👏 Hold sammen i '+remain+'s for at lukke', W/2, 78);
+    const bx=64,by=142,bw=W-128,bh=36,br=18; x.fillStyle='rgba(14,165,233,0.12)'; roundRect(x,bx,by,bw,bh,br); x.fill();
+    if(prog>0){ const g=x.createLinearGradient(bx,0,bx+bw,0); g.addColorStop(0,'#bae6fd'); g.addColorStop(1,'#0ea5e9'); x.fillStyle=g;
+      roundRect(x,bx,by,Math.max(br*2,Math.round(bw*prog)),bh,br); x.fill(); }
+    tex.needsUpdate=true; }
+
+  // ───────────────────────── exit ─────────────────────────
+  function endXR(){ if(renderer.xr.getSession()) renderer.xr.getSession().end(); }
+  function onSessionEnd(){ teardown(); }
+  function exitPreview(){ removeEventListener('mousemove', onMouse); teardown(); }
+  function teardown(){
+    renderer.setAnimationLoop(null);
+    $('music').pause(); $('toast').classList.remove('show');
+    document.body.classList.remove('in-session');
+    $('overlay').classList.remove('webxr-hidden'); $('start-button').style.display='flex';
+    [gameRig,kite,stringLine,portalGlow].forEach(o=>{ if(o&&o.parent) o.parent.remove(o); });
+    clouds=[]; menuClouds=[]; bricks=[]; invaders=[]; rocks=[]; parts=[]; bullets=[];
+    snakeMesh=null; foodMesh=null; snakeBody=[]; snakeLen=0; snakeTarget=0;
+    if(clapHUD&&clapHUD.parent) clapHUD.parent.remove(clapHUD);
+    if(promptHUD&&promptHUD.parent) promptHUD.parent.remove(promptHUD);
+    gameRig=kite=stringLine=clapHUD=promptHUD=portalGlow=null;
+    kiteShield=null; ballGlow=null; shieldA=0; shieldTarget=0; ballFlare=0; beatHigh=false; sessionPrevHigh=0;
+    state='closed'; xrMode=false; isLaunching=false; portalT=0; nightTarget=0; stormTarget=0; stormWait=0; clapStart=0; activeController=null; longTapStart=0; glowT=0;
+  }
+
+  // ───────────────────────── main loop ─────────────────────────
+  function render(time, frame){
+    const dt=Math.min(clock.getDelta(),1/30);
+
+    // animate procedural sky + smooth day/night/storm, drive cloud + ring ambiance
+    if(skyDisc){ const u=skyDisc.material.uniforms; u.uTime.value+=dt;
+      u.uNight.value += (nightTarget-u.uNight.value)*Math.min(1,dt*1.5);
+      u.uStorm.value += (stormTarget-u.uStorm.value)*Math.min(1,dt*1.2);
+      const ny=u.uNight.value, st=u.uStorm.value;
+      for(const c of clouds){ c.material.opacity=0.9*(1-ny); c.material.color.setScalar(1-st*0.45); }
+      if(ring) ring.material.emissiveIntensity=0.25+ny*0.35;
+    }
+
+    if(xrMode){ checkClap(); drawClapHUD(); if(isSelecting) processSelect(); }
+
+    // 9-second hold-to-exit
+    if(longTapStart > 0 && GAMES.includes(state)) {
+      const el = Date.now() - longTapStart;
+      if (el > 500) { prompt('⏳ Menu om ' + Math.ceil((LONG_TAP_TIME - el) / 1000) + 's'); }
+      if (el >= LONG_TAP_TIME) { longTapStart = 0; back(); }
+    }
+
+    // ─── DRAMATISK INTRO-SEKVENS ───
+    if (state === 'ascend') {
+      ascendT = Math.min(1, ascendT + dt * 0.22); // ~4.5 sekunders langsom opstigning
+      const e = ascendT * ascendT * (3 - 2 * ascendT);
+
+      _v.set(0, 0, KITE_Z);
+      gameRig.localToWorld(_v); // Dragen svæver hen mod midten af det usynlige gameRig
+
+      kite.position.lerpVectors(ascendFrom, _v, e);
+      orientKite(dt);
+
+      if (ascendT >= 1) {
+        state = 'portal';
+        portalT = 0;
+        glowT = 0;
+        gameRig.visible = true; // Forbered til at åbne portalen
+        if (portalGlow) {
+          portalGlow.visible = true;
+          portalGlow.material.opacity = 0;
+          beep(880, 0.15, 'sine', 0.1); // Magisk klokkeslag
+          setTimeout(() => beep(1320, 0.4, 'sine', 0.15), 150); // Ekko / twinkle
+        }
+        if (xrMode) prompt(''); // Ryd teksten, lad animationen tale
+      }
+    }
+    else if (state === 'portal') {
+      glowT += dt;
+
+      // Animér det magiske lys bagved dragen
+      if (portalGlow) {
+        let gAlpha = glowT < 0.5 ? (glowT / 0.5) : Math.max(0, 1 - (glowT - 0.5) / 0.7);
+        portalGlow.material.opacity = gAlpha * 0.9;
+        portalGlow.scale.setScalar(0.5 + glowT * 6); // Lyset pulserer voldsomt op
+      }
+
+      // Selve himmel-portalen åbnes, efter lyset er vokset
+      if (glowT > 0.4) {
+        portalT = Math.min(1, portalT + dt * 0.5); // Slower spawn (2 sekunder om at åbne)
+        const e = 1 - Math.pow(1 - portalT, 3);
+        gameRig.scale.setScalar(0.001 + e);
+      }
+
+      // Lås dragen til lokal midte, så den skubbes elegant ud med portalen!
+      kiteLocal.set(0, 0);
+      _v.set(0, 0, KITE_Z);
+      gameRig.localToWorld(_v);
+      kite.position.copy(_v);
+      orientKite(dt);
+
+      if (portalT >= 1 && glowT > 1.2) {
+        if (portalGlow) portalGlow.visible = false;
+        enterMenu();
+      }
+    }
+    // ─── END INTRO ───
+
+    if(state!=='ascend' && state!=='select' && state!=='portal' && clouds.length){
+      for(const c of clouds){
+        c.position.x+=c.userData.spd*dt;
+        if(c.position.x>1.05) c.position.x=-1.05;
+      }
+    }
+
+    if(ring) ring.rotation.z += dt*0.05;
+
+    if(state==='menu'){ computeKite(dt); updateMenu(dt); }
+    else if(state==='pong'){ computeKite(dt); updatePong(dt); }
+    else if(state==='breakout'){ computeKite(dt); updateBreakout(dt); }
+    else if(state==='invaders'){ computeKite(dt); updateInvaders(dt); }
+    else if(state==='asteroids'){ computeKite(dt); updateAsteroids(dt); }
+    else if(state==='snake'){ updateSnake(dt); }
+
+    // gyldent skjold: fade, sitren og træf-ripple
+    if(kiteShield && kiteShield.visible){
+      const u=kiteShield.material.uniforms;
+      shieldA += (shieldTarget-shieldA)*Math.min(1,dt*6);
+      u.uA.value=shieldA; u.uTime.value+=dt; u.uHitAge.value+=dt;
+      if(shieldTarget===0 && shieldA<0.02) kiteShield.visible=false;
+    }
+    // boldens energi-glød: lille puls + flare ved serv/mål/træf
+    ballFlare=Math.max(0, ballFlare-dt*2.4);
+    if(ballGlow){ ballGlow.scale.setScalar(0.2 + ballFlare*0.34 + Math.sin(clock.elapsedTime*8)*0.012);
+      ballGlow.material.opacity=0.8 + 0.2*ballFlare; }
+
+    updateParts(dt);
+    if(score!==lastScore){ drawScore(); lastScore=score; }
+
+    renderer.render(scene, camera);
+  }
+  </script>
+</body>
+</html>
