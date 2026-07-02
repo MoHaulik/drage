@@ -52,7 +52,10 @@
   <div id="toast">Drageflugt åbner…</div>
   <button class="exit-x" id="exit-x" aria-label="Luk">×</button>
   <div id="hint">👆 Langt tryk (5s) = menu · 👏 Hænder sammen = luk</div>
-  <audio id="music" preload="auto" loop><source src="music.mp3" type="audio/mpeg"></audio>
+  <!-- Lydbank: filerne ligger fladt ved siden af denne HTML i repo'et -->
+  <audio id="bg" preload="auto" loop><source src="baggrund.mp3" type="audio/mpeg"></audio>
+  <audio id="sfx-select" preload="auto"><source src="select.wav" type="audio/wav"></audio>
+  <audio id="sfx-open" preload="auto"><source src="open.wav" type="audio/wav"></audio>
 
   <script type="module">
   import * as THREE from 'three';
@@ -77,7 +80,7 @@
   let clapStart = 0; const CLAP_DIST = 0.15, CLAP_TIME = 6000;
   let clapHUD, promptHUD;
 
-  const SEG_GAP = 0.055, SNAKE_SPEED = 0.7, SNAKE_START = 6, SNAKE_GROW = 3, SNAKE_MAX = 150;
+  const SEG_GAP = 0.055, SNAKE_SPEED = 0.7, SNAKE_START = 6, SNAKE_GROW = 1, SNAKE_MAX = 150;   // +1 bold pr. ballon — bedre skalering
 
   let gameRig, skyDisc, ring, kite, kiteTail, stringLine, scoreBanner;
   let portalGlow, glowT = 0;
@@ -218,6 +221,13 @@
     }
   `;
 
+  // ── rigtige lydfiler (baggrund.mp3 / select.wav / open.wav) ──
+  function primeAudio(){ ['bg','sfx-select','sfx-open'].forEach(id=>{ const a=$(id); if(!a) return;   // unlock på user-gesture
+    a.play().then(()=>{ a.pause(); a.currentTime=0; }).catch(()=>{}); }); }
+  function playSfx(id,vol=0.9){ const a=$(id); if(!a) return; a.volume=vol; a.currentTime=0; a.play().catch(()=>{}); }
+  function startBg(){ const a=$('bg'); if(!a) return; a.volume=0.28; a.play().catch(()=>{}); }        // idempotent: play() på kørende loop = no-op
+  function stopSfx(id){ const a=$(id); if(!a) return; a.pause(); a.currentTime=0; }
+
   let ac = null;
   function beep(freq, dur=0.08, type='sine', vol=0.18){
     if(!ac) return; const t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
@@ -270,6 +280,7 @@
   async function launch(){
     if(isLaunching) return; isLaunching = true;
     try{ ac = ac || new (window.AudioContext||window.webkitAudioContext)(); ac.resume(); }catch(e){}
+    primeAudio();
     $('toast').classList.add('show');
     let ok = false;
     if(navigator.xr){ try{ ok = await navigator.xr.isSessionSupported('immersive-ar'); }catch(e){} }
@@ -294,7 +305,6 @@
     renderer.xr.setSession(session);
     buildScene(); buildControllers(session); buildHUDs();
     renderer.compile(scene, camera);
-    $('music').volume = 0.28; $('music').play().catch(()=>{});
     session.addEventListener('end', onSessionEnd);
     renderer.setAnimationLoop(render);
     startSelect();
@@ -308,7 +318,7 @@
     $('hint').textContent = '🖱️ Bevæg = styr dragen · Langt klik (5s) = menu';
     buildScene(); buildHUDs();
     camera.position.set(0,0,0); camera.lookAt(0,1.25,-1.55);
-    $('music').volume = 0.28; $('music').play().catch(()=>{});
+    playSfx('sfx-open',0.8);   // magisk åbning: kører under opstigning + portal-åbning
     addEventListener('mousemove', onMouse);
     addEventListener('mousedown', () => { longTapStart = Date.now(); fire(); });
     addEventListener('mouseup', () => { longTapStart = 0; if(state !== 'menu' && GAMES.includes(state)) prompt(''); });
@@ -559,6 +569,7 @@
   function confirmController(idx){
     isSelecting=false; activeIdx=idx; activeController=controllers[idx];
     burst(activeController, 36); beep(660,0.12); beep(880,0.12,'sine',0.14);
+    playSfx('sfx-open',0.8);   // åbningslyd: fra dragen letter til portalen står helt åben
     state='ascend'; ascendT=0; kite.visible=true; stringLine.visible=true;
     activeController.getWorldPosition(ascendFrom); kite.position.copy(ascendFrom);
     prompt('🪁 Følg dragen op i himlen');
@@ -568,6 +579,7 @@
 
   function enterMenu(){
     gameRig.scale.setScalar(1); // Sørg for fuld størrelse
+    stopSfx('sfx-open'); startBg();   // portalen er helt åben → baggrund.mp3 looper herfra (menu + alle spil)
     state='menu'; clearGames(); setNight(false);
     menuClouds.forEach(g=>{ g.visible=true; g.userData.ring.geometry.dispose(); g.userData.ring.geometry=new THREE.RingGeometry(0.2,0.22,32,1,0,0.001); });
     dwell=0; dwellTarget=-1; recenter(); prompt('🪁 Vælg et spil');
@@ -595,7 +607,7 @@
     longTapStart = 0;
     menuClouds.forEach(g=>g.visible=false); clearGames(); recenter(); prompt('');
     score=0; lastScore=-1; beatHigh=false; sessionPrevHigh=highs[id]|0;   // hver session starter på 0
-    beep(740,0.1); state=id;
+    playSfx('sfx-select'); state=id;
     if(id==='pong') initPong();
     else if(id==='breakout') initBreakout();
     else if(id==='invaders') initInvaders();
@@ -1156,7 +1168,7 @@
   function exitPreview(){ removeEventListener('mousemove', onMouse); teardown(); }
   function teardown(){
     renderer.setAnimationLoop(null);
-    $('music').pause(); $('toast').classList.remove('show');
+    $('bg').pause(); stopSfx('sfx-open'); $('toast').classList.remove('show');
     document.body.classList.remove('in-session');
     $('overlay').classList.remove('webxr-hidden'); $('start-button').style.display='flex';
     [gameRig,kite,stringLine,portalGlow].forEach(o=>{ if(o&&o.parent) o.parent.remove(o); });
