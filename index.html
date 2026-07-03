@@ -6,6 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@800&display=swap" rel="stylesheet">
   <script type="importmap">
   {
     "imports": {
@@ -69,6 +72,10 @@
   const R = 1.4, PW = 1.0, PH = 1.0, OBJ_Z = 0.1, KITE_Z = 0.35, CLOUD_Z = 0.05;
   const SHIELD_Z = 0.12;             // gyldent energi-lag: lige foran bold-planet
   const $ = id => document.getElementById(id);
+
+  // Baloo 2 til menu-titler — loades i launch() før canvas-teksturerne tegnes
+  const MENU_FONT = '"Baloo 2","SF Pro Rounded","Segoe UI",sans-serif';
+  const MENU_BLUE = '#4aa8f0';       // lysere himmelblå, stadig læsbar på hvid sky
 
   let controllers = [], activeController = null, activeIdx = 0;
   let isSelecting = false, selStart = 0, holdStart = {};
@@ -225,6 +232,7 @@
   function primeAudio(){ ['bg','sfx-select','sfx-open'].forEach(id=>{ const a=$(id); if(!a) return;   // unlock på user-gesture
     a.play().then(()=>{ a.pause(); a.currentTime=0; }).catch(()=>{}); }); }
   function playSfx(id,vol=0.9){ const a=$(id); if(!a) return; a.volume=vol; a.currentTime=0; a.play().catch(()=>{}); }
+  function playOpenDelayed(){ setTimeout(()=>{ if(state==='ascend'||state==='portal') playSfx('sfx-open',0.8); },1000); }   // åbningslyd starter 1s senere
   function startBg(){ const a=$('bg'); if(!a) return; a.volume=0.28; a.play().catch(()=>{}); }        // idempotent: play() på kørende loop = no-op
   function stopSfx(id){ const a=$(id); if(!a) return; a.pause(); a.currentTime=0; }
 
@@ -281,6 +289,7 @@
     if(isLaunching) return; isLaunching = true;
     try{ ac = ac || new (window.AudioContext||window.webkitAudioContext)(); ac.resume(); }catch(e){}
     primeAudio();
+    try{ await document.fonts.load('800 100px "Baloo 2"'); }catch(e){}   // font klar FØR canvas-teksturer tegnes
     $('toast').classList.add('show');
     let ok = false;
     if(navigator.xr){ try{ ok = await navigator.xr.isSessionSupported('immersive-ar'); }catch(e){} }
@@ -318,7 +327,7 @@
     $('hint').textContent = '🖱️ Bevæg = styr dragen · Langt klik (5s) = menu';
     buildScene(); buildHUDs();
     camera.position.set(0,0,0); camera.lookAt(0,1.25,-1.55);
-    playSfx('sfx-open',0.8);   // magisk åbning: kører under opstigning + portal-åbning
+    playOpenDelayed();   // magisk åbning: starter 1s inde i opstigningen
     addEventListener('mousemove', onMouse);
     addEventListener('mousedown', () => { longTapStart = Date.now(); fire(); });
     addEventListener('mouseup', () => { longTapStart = 0; if(state !== 'menu' && GAMES.includes(state)) prompt(''); });
@@ -478,7 +487,7 @@
       const grp=new THREE.Group(); grp.position.set(pos[i][0],pos[i][1],0.15);
       const cloud=new THREE.Sprite(new THREE.SpriteMaterial({ map:texCloud, transparent:true, depthWrite:false }));
       cloud.scale.set(0.62,0.4,1); grp.add(cloud);
-      const lp=textPlane(0.5,0.16,'#0f3a6b',lab); lp.position.z=0.01; grp.add(lp);
+      const lp=textPlane(0.5,0.16,MENU_BLUE,lab,MENU_FONT); lp.position.z=0.01; grp.add(lp);   // Baloo 2 ExtraBold i lys himmelblå
       const ringSel=new THREE.Mesh(new THREE.RingGeometry(0.2,0.22,32,1,0,0.001),
         new THREE.MeshBasicMaterial({ color:0x0ea5e9, side:THREE.DoubleSide, transparent:true, toneMapped:false }));
       ringSel.position.z=0.02; grp.add(ringSel);
@@ -494,16 +503,16 @@
       bullets.push({ m, on:false, vx:0, vy:0, age:0 }); }
   }
 
-  function textPlane(w,h,color,txt){
+  function textPlane(w,h,color,txt,font){
     const c=document.createElement('canvas'); c.width=512; c.height=Math.round(512*h/w);
     const tex=new THREE.CanvasTexture(c); tex.encoding=THREE.sRGBEncoding;
     const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h), new THREE.MeshBasicMaterial({ map:tex, transparent:true, toneMapped:false, side:THREE.DoubleSide, depthWrite:false }));
-    m.userData={ c, x:c.getContext('2d'), tex, color:color||'#fff' };
+    m.userData={ c, x:c.getContext('2d'), tex, color:color||'#fff', font:font||'-apple-system,"SF Pro Rounded","Segoe UI",sans-serif' };
     if(txt!==undefined) drawLabel(m,txt); return m;
   }
-  function drawLabel(m,txt){ const {c,x,tex,color}=m.userData; x.clearRect(0,0,c.width,c.height);
+  function drawLabel(m,txt){ const {c,x,tex,color,font}=m.userData; x.clearRect(0,0,c.width,c.height);
     x.fillStyle=color; let f=Math.round(c.height*0.5);
-    do{ x.font='800 '+f+'px -apple-system,"SF Pro Rounded","Segoe UI",sans-serif'; f-=4; }
+    do{ x.font='800 '+f+'px '+font; f-=4; }
     while(x.measureText(txt).width>c.width*0.94 && f>20);
     x.textAlign='center'; x.textBaseline='middle'; x.fillText(txt,c.width/2,c.height/2); tex.needsUpdate=true; }
   function drawScore(){ if(!scoreBanner) return;
@@ -569,8 +578,8 @@
   function confirmController(idx){
     isSelecting=false; activeIdx=idx; activeController=controllers[idx];
     burst(activeController, 36); beep(660,0.12); beep(880,0.12,'sine',0.14);
-    playSfx('sfx-open',0.8);   // åbningslyd: fra dragen letter til portalen står helt åben
     state='ascend'; ascendT=0; kite.visible=true; stringLine.visible=true;
+    playOpenDelayed();   // åbningslyd: starter 1s inde i opstigningen
     activeController.getWorldPosition(ascendFrom); kite.position.copy(ascendFrom);
     prompt('🪁 Følg dragen op i himlen');
   }
@@ -583,6 +592,7 @@
     state='menu'; clearGames(); setNight(false);
     menuClouds.forEach(g=>{ g.visible=true; g.userData.ring.geometry.dispose(); g.userData.ring.geometry=new THREE.RingGeometry(0.2,0.22,32,1,0,0.001); });
     dwell=0; dwellTarget=-1; recenter(); prompt('🪁 Vælg et spil');
+    setTimeout(()=>{ if(state==='menu') prompt(''); },5000);   // HUD-boblen fader efter 5s — titlen på portalen bliver
     drawLabel(scoreBanner,'🪁 Vælg et spil');
   }
 
