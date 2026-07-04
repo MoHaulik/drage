@@ -66,7 +66,7 @@
   // ───────────────────────── core ─────────────────────────
   let scene, camera, renderer, clock = new THREE.Clock();
   let xrMode = false, isLaunching = false;
-  let state = 'closed';              // closed|select|ascend|portal|menu|pong|breakout|invaders|asteroids|snake
+  let state = 'closed';              // closed|select|ascend|portal|tutorial|menu|pong|breakout|invaders|asteroids|snake
   const GAMES = ['pong','breakout','invaders','asteroids','snake'];
 
   const R = 1.4, PW = 1.0, PH = 1.0, OBJ_Z = 0.1, KITE_Z = 0.35, CLOUD_Z = 0.05;
@@ -108,6 +108,12 @@
   let score = 0, lastScore = -1;
   let highs = {}; try{ highs = JSON.parse(localStorage.getItem('nxtKiteHighs')) || {}; }catch(e){}
   let beatHigh = false, sessionPrevHigh = 0;
+
+  // ── "Lær at flyve": engangs-tutorial (kører kun allerførste gang på devicet) ──
+  let tutSeen = false; try{ tutSeen = localStorage.getItem('nxtKiteTut')==='1'; }catch(e){}
+  let tutPts = [], tutIdx = 0, tutDwell = 0, tutDone = 0;
+  const TUT_DWELL = 1.1;                       // samme hold-tid som menuen — det ER menutræningen
+  const TUT_POS = [[-0.7,0.42],[0.7,0.42],[-0.55,-0.28],[-0.20,-0.56],[0.38,-0.42]];   // 1=Pong · 2=Tordensky · 3+4 omkring Blå Himmel · 5=Slange 🏁
 
   // game-tuning state
   let pongTime = 0, pongLost = 0, pongTier = -1;     // adaptive pong
@@ -434,6 +440,7 @@
 
     buildKite();
     buildMenu();
+    buildTutorial();
 
     // Gyldent energi-skjold om dragen (vises kun i bold-spil; viser den ÆGTE hitbox)
     kiteShield = new THREE.Mesh(new THREE.PlaneGeometry(1,1),
@@ -495,6 +502,73 @@
     });
   }
 
+  // ── "Lær at flyve": 5 nummererede checkpoints — samme sky+ring-sprog som menuen, så træningen overfører 1:1 ──
+  function buildTutorial(){
+    tutPts=[];
+    TUT_POS.forEach((p,i)=>{
+      const grp=new THREE.Group(); grp.position.set(p[0],p[1],0.15);
+      const cloud=new THREE.Sprite(new THREE.SpriteMaterial({ map:texCloud, transparent:true, depthWrite:false }));
+      cloud.scale.set(0.5,0.36,1); grp.add(cloud);
+      const lab=textPlane(0.34,0.24, MENU_BLUE, i===4?'5 🏁':''+(i+1), MENU_FONT); lab.position.z=0.01; grp.add(lab);
+      const ringSel=new THREE.Mesh(new THREE.RingGeometry(0.16,0.185,32,1,0,0.001),
+        new THREE.MeshBasicMaterial({ color:0x0ea5e9, side:THREE.DoubleSide, transparent:true, toneMapped:false }));
+      ringSel.position.z=0.02; grp.add(ringSel);
+      grp.userData={ i, cloud, lab, ring:ringSel, done:false };
+      grp.visible=false; gameRig.add(grp); tutPts.push(grp);
+    });
+  }
+
+  function enterTutorial(){
+    gameRig.scale.setScalar(1);
+    stopSfx('sfx-open'); startBg();
+    state='tutorial'; clearGames();
+    menuClouds.forEach(g=>g.visible=false);
+    tutIdx=0; tutDwell=0; tutDone=0;
+    tutPts.forEach(g=>{ const u=g.userData; g.visible=true; u.done=false;
+      u.lab.userData.color=MENU_BLUE; drawLabel(u.lab, u.i===4?'5 🏁':''+(u.i+1));
+      u.ring.material.color.setHex(0x0ea5e9);
+      u.ring.geometry.dispose(); u.ring.geometry=new THREE.RingGeometry(0.16,0.185,32,1,0,0.001); });
+    recenter();
+    drawLabel(scoreBanner,'🎓 Lær at flyve');
+    prompt('🪁 Flyv dragen hen til 1 — og bliv der!');
+  }
+
+  function tutHit(){
+    const g=tutPts[tutIdx], u=g.userData;
+    u.done=true; tutDone++; tutDwell=0;
+    u.lab.userData.color='#ffd166'; drawLabel(u.lab, u.i===4?'5 🏁':''+(u.i+1));       // tallet lyser op i guld
+    u.ring.material.color.setHex(0xffd166);
+    u.ring.geometry.dispose(); u.ring.geometry=new THREE.RingGeometry(0.16,0.185,32,1,0,TAU);
+    popAt(g.position.x, g.position.y, 0xffd166, 10);
+    beep(523*Math.pow(1.19,tutIdx),0.1,'sine',0.12); setTimeout(()=>beep(784*Math.pow(1.19,tutIdx),0.12,'sine',0.1),90);   // stigende duo pr. punkt
+    if(tutDone>=tutPts.length){                                                        // 🏁 alle 5 lyser → menuen låses op
+      tutSeen=true; try{ localStorage.setItem('nxtKiteTut','1'); }catch(e){}
+      prompt('🎉 Du kan flyve! Nu åbner spillene…');
+      skyClearChime(); popAt(0,0.2,0x9be0ff,20); popAt(0.3,-0.2,0xff7aa2,14); popAt(-0.3,0,0x9be870,14);
+      setTimeout(()=>{ if(state==='tutorial'){ tutPts.forEach(g=>g.visible=false); enterMenu(); } },2200);
+    } else {
+      tutIdx++;
+      prompt(tutIdx===4 ? '🏁 Sidste stop — flyv i mål!' : '✨ Flot! Videre til '+(tutIdx+1));
+    }
+  }
+
+  function updateTutorial(dt){
+    if(tutDone>=tutPts.length) return;                       // finale-fest kører — vent på enterMenu
+    const t=clock.elapsedTime;
+    tutPts.forEach((g,i)=>{ const u=g.userData;
+      if(u.done){ g.scale.setScalar(1); u.cloud.material.opacity=1; u.lab.material.opacity=1; }
+      else if(i===tutIdx){ g.scale.setScalar(1+Math.sin(t*4)*0.09); u.cloud.material.opacity=1; u.lab.material.opacity=1; }   // aktivt punkt "ånder"
+      else { g.scale.setScalar(0.78); u.cloud.material.opacity=0.32; u.lab.material.opacity=0.32; }                            // fremtidige punkter dæmpet
+    });
+    const g=tutPts[tutIdx], u=g.userData;
+    const d=Math.hypot(kiteLocal.x-g.position.x, kiteLocal.y-g.position.y);
+    if(d<0.24){ const tick=(tutDwell*4)|0; tutDwell+=dt; if(((tutDwell*4)|0)!==tick) beep(500+tutDwell*300,0.03,'sine',0.05); }   // hold = tikkende opladning
+    else tutDwell=Math.max(0, tutDwell-dt*2.5);                                        // flyver man væk, drænes ringen blidt
+    u.ring.geometry.dispose();
+    u.ring.geometry=new THREE.RingGeometry(0.16,0.185,32,1,-Math.PI/2, Math.max(0.001, Math.min(1,tutDwell/TUT_DWELL)*TAU));
+    if(tutDwell>=TUT_DWELL) tutHit();
+  }
+
   function initPools(){
     parts=[]; for(let i=0;i<PART_N;i++){ const m=new THREE.Mesh(G_PART, new THREE.MeshBasicMaterial({ transparent:true, depthWrite:false, toneMapped:false }));
       m.visible=false; scene.add(m); parts.push({ m, on:false, v:new THREE.Vector3(), age:0, life:0, base:0.02 }); }
@@ -510,7 +584,7 @@
     m.userData={ c, x:c.getContext('2d'), tex, color:color||'#fff', font:font||'-apple-system,"SF Pro Rounded","Segoe UI",sans-serif' };
     if(txt!==undefined) drawLabel(m,txt); return m;
   }
-  function drawLabel(m,txt){ const {c,x,tex,color,font}=m.userData; x.clearRect(0,0,c.width,c.height);
+  function drawLabel(m,txt){ const {c,x,tex,font}=m.userData; const color=m.userData.color; x.clearRect(0,0,c.width,c.height);
     x.fillStyle=color; let f=Math.round(c.height*0.5);
     do{ x.font='800 '+f+'px '+font; f-=4; }
     while(x.measureText(txt).width>c.width*0.94 && f>20);
@@ -587,9 +661,11 @@
   function setNight(on){ nightTarget = on ? 1 : 0; }   // smooth lerp happens in render()
 
   function enterMenu(){
+    if(!tutSeen) return enterTutorial();               // allerførste gang: flyveskole før menuen
     gameRig.scale.setScalar(1); // Sørg for fuld størrelse
     stopSfx('sfx-open'); startBg();   // portalen er helt åben → baggrund.mp3 looper herfra (menu + alle spil)
     state='menu'; clearGames(); setNight(false);
+    tutPts.forEach(g=>g.visible=false);
     menuClouds.forEach(g=>{ g.visible=true; g.userData.ring.geometry.dispose(); g.userData.ring.geometry=new THREE.RingGeometry(0.2,0.22,32,1,0,0.001); });
     dwell=0; dwellTarget=-1; recenter(); prompt('🪁 Vælg et spil');
     setTimeout(()=>{ if(state==='menu') prompt(''); },5000);   // HUD-boblen fader efter 5s — titlen på portalen bliver
@@ -1129,6 +1205,8 @@
   }
 
   function fire(){
+    if(state==='tutorial'){ const g=tutPts[tutIdx];                                             // tryk = turbo-opladning (samme mentale model som menuen)
+      if(g && Math.hypot(kiteLocal.x-g.position.x, kiteLocal.y-g.position.y)<0.24) tutDwell=TUT_DWELL; return; }
     if(state==='menu'){ let over=-1,bd=0.26; menuClouds.forEach((g,i)=>{ const d=Math.hypot(kiteLocal.x-g.position.x,kiteLocal.y-g.position.y); if(d<bd){bd=d;over=i;} });
       if(over>=0) startGame(menuClouds[over].userData.id); return; }
     if(state==='invaders'){ if(bullets.some(b=>b.on)) return;                                   // klassisk: ÉT skud ad gangen (ingen spam)
@@ -1183,6 +1261,7 @@
     $('overlay').classList.remove('webxr-hidden'); $('start-button').style.display='flex';
     [gameRig,kite,stringLine,portalGlow].forEach(o=>{ if(o&&o.parent) o.parent.remove(o); });
     clouds=[]; menuClouds=[]; bricks=[]; invaders=[]; rocks=[]; parts=[]; bullets=[];
+    tutPts=[]; tutIdx=0; tutDwell=0; tutDone=0;
     snakeMesh=null; foodMesh=null; snakeBody=[]; snakeLen=0; snakeTarget=0;
     if(clapHUD&&clapHUD.parent) clapHUD.parent.remove(clapHUD);
     if(promptHUD&&promptHUD.parent) promptHUD.parent.remove(promptHUD);
@@ -1264,7 +1343,7 @@
 
       if (portalT >= 1 && glowT > 1.2) {
         if (portalGlow) portalGlow.visible = false;
-        enterMenu();
+        enterMenu();   // → første gang på devicet omdirigeres til "Lær at flyve"
       }
     }
     // ─── END INTRO ───
@@ -1278,7 +1357,8 @@
 
     if(ring) ring.rotation.z += dt*0.05;
 
-    if(state==='menu'){ computeKite(dt); updateMenu(dt); }
+    if(state==='tutorial'){ computeKite(dt); updateTutorial(dt); }
+    else if(state==='menu'){ computeKite(dt); updateMenu(dt); }
     else if(state==='pong'){ computeKite(dt); updatePong(dt); }
     else if(state==='breakout'){ computeKite(dt); updateBreakout(dt); }
     else if(state==='invaders'){ computeKite(dt); updateInvaders(dt); }
