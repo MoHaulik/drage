@@ -45,13 +45,11 @@
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute"><defs><g id="icon-play"><path d="M8 5v14l11-7z" stroke-linejoin="round" stroke-linecap="round"/></g></defs></svg>
-
   <div id="overlay">
     <button class="xr-btn" id="start-button" aria-label="Start XR Experience">
       <svg class="play-svg" viewBox="0 0 24 24"><use href="#icon-play"></use></svg>
     </button>
   </div>
-
   <div id="toast">Drageflugt åbner…</div>
   <button class="exit-x" id="exit-x" aria-label="Luk">×</button>
   <div id="hint">👆 Langt tryk (5s) = menu · 👏 Hænder sammen = luk</div>
@@ -59,36 +57,27 @@
   <audio id="bg" preload="auto" loop><source src="baggrund.mp3" type="audio/mpeg"></audio>
   <audio id="sfx-select" preload="auto"><source src="select.wav" type="audio/wav"></audio>
   <audio id="sfx-open" preload="auto"><source src="open.wav" type="audio/wav"></audio>
-
   <script type="module">
   import * as THREE from 'three';
-
   // ───────────────────────── core ─────────────────────────
   let scene, camera, renderer, clock = new THREE.Clock();
   let xrMode = false, isLaunching = false;
   let state = 'closed';              // closed|select|ascend|portal|tutorial|menu|pong|breakout|invaders|asteroids|snake
   const GAMES = ['pong','breakout','invaders','asteroids','snake'];
-
   const R = 1.4, PW = 1.0, PH = 1.0, OBJ_Z = 0.1, KITE_Z = 0.35, CLOUD_Z = 0.05;
   const SHIELD_Z = 0.12;             // gyldent energi-lag: lige foran bold-planet
   const $ = id => document.getElementById(id);
-
   // Baloo 2 til menu-titler — loades i launch() før canvas-teksturerne tegnes
   const MENU_FONT = '"Baloo 2","SF Pro Rounded","Segoe UI",sans-serif';
   const MENU_BLUE = '#4aa8f0';       // lysere himmelblå, stadig læsbar på hvid sky
-
   let controllers = [], activeController = null, activeIdx = 0;
   let isSelecting = false, selStart = 0, holdStart = {};
   const SELECT_TIME = 4000, HOLD_TIME = 3000;
-
   let longTapStart = 0;
   const LONG_TAP_TIME = 5000;                // menu hold — 5s per spec
-
   let clapStart = 0; const CLAP_DIST = 0.15, CLAP_TIME = 6000;
   let clapHUD, promptHUD;
-
   const SEG_GAP = 0.055, SNAKE_SPEED = 0.7, SNAKE_START = 6, SNAKE_GROW = 1, SNAKE_MAX = 150;   // +1 bold pr. ballon — bedre skalering
-
   let gameRig, skyDisc, ring, kite, kiteTail, stringLine, scoreBanner;
   let portalGlow, glowT = 0;
   let clouds = [], menuClouds = [];
@@ -101,52 +90,42 @@
   const TAU = Math.PI*2;
   let ascendFrom = new THREE.Vector3(), ascendT = 0;
   let dwell = 0, dwellTarget = -1;
-
   const INVERT_YAW = -1, INVERT_PITCH = 1, GAIN = 3.0;
-
   // per-spil highscore: hver session starter på 0, rekorder gemmes pr. spil på device
   let score = 0, lastScore = -1;
   let highs = {}; try{ highs = JSON.parse(localStorage.getItem('nxtKiteHighs')) || {}; }catch(e){}
   let beatHigh = false, sessionPrevHigh = 0;
-
-  // ── "Lær at flyve": engangs-tutorial (kører kun allerførste gang på devicet) ──
-  let tutSeen = false; try{ tutSeen = localStorage.getItem('nxtKiteTut')==='1'; }catch(e){}
+  // ── "Lær at flyve": kører HVER session — alle patienter skal igennem flyveskolen.
+  //    Nulstilles ved teardown (XR-exit / restart), så den også kører igen uden page-refresh.
+  let tutSeen = false;
   let tutPts = [], tutIdx = 0, tutDwell = 0, tutDone = 0;
   const TUT_DWELL = 1.1;                       // samme hold-tid som menuen — det ER menutræningen
-  const TUT_POS = [[-0.7,0.42],[0.7,0.42],[-0.55,-0.28],[-0.20,-0.56],[0.38,-0.42]];   // 1=Pong · 2=Tordensky · 3+4 omkring Blå Himmel · 5=Slange 🏁
-
+  const TUT_POS = [[-0.7,0.42],[0.7,0.42],[0.38,-0.42]];   // 3 punkter: 1=Pong · 2=Tordensky · 3=Slange 🏁
   // game-tuning state
   let pongTime = 0, pongLost = 0, pongTier = -1;     // adaptive pong
   let bkLvl = 0;                                      // breakout level
   let waveN = 0, igT = 0;                             // invader waves + pattern clock
   let texCloud = null, texEnergy = null;             // shared textures
-
   // gylden energi: skjold om dragen + glød om bolden
   let kiteShield = null, shieldA = 0, shieldTarget = 0, ballGlow = null, ballFlare = 0;
-
   // ── Tordensky: 3D kawaii cloud-invaders (klassisk Space-Invaders logik) ──
   let CG = null, igFloorY = -0.82, igTotal = 0;
   const CLOUD_PUFFS=[{s:0.16,x:0,y:0.02,z:0},{s:0.12,x:-0.12,y:0,z:0.02},{s:0.12,x:0.12,y:0,z:0.02},{s:0.15,x:-0.06,y:0.1,z:0},{s:0.15,x:0.06,y:0.1,z:0}];
   const CLOUD_HORNS=[{x:-0.12,y:0.18,rz:0.4},{x:0.12,y:0.18,rz:-0.4}];
-
   const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _cam = new THREE.Vector3();
   const _e = new THREE.Euler(0,0,0,'YXZ'), _q = new THREE.Quaternion();
   const _inp = new THREE.Vector2();
   const _m = new THREE.Matrix4(), _col = new THREE.Color(), _td = new THREE.Vector2(), _tv = new THREE.Vector2();
-
   const G_BALL = new THREE.SphereGeometry(0.05,18,18);
   const G_BOX  = new THREE.BoxGeometry(1,1,0.08);
   const G_BULLET = new THREE.SphereGeometry(0.025,8,8);
   const G_PART = new THREE.SphereGeometry(1,6,6);
   const G_SEG  = new THREE.SphereGeometry(1,8,8);
   const M_BULLET = new THREE.MeshBasicMaterial({color:0xfff3b0,toneMapped:false});
-
   const PART_N = 70; let parts = [];
   const BULLET_N = 24; let bullets = [];
-
   let ball, ballV = new THREE.Vector2(), aiPaddle, bricks = [], invaders = [], rocks = [];
   let igDir = 1, igX = 0, igY = 0, igSpd = 0.22;
-
   // ───────────── procedural sky shader (1 draw call) ─────────────
   const SKY_VS = `
     varying vec2 vUv;
@@ -197,7 +176,6 @@
       gl_FragColor = vec4(col, 1.0);
     }
   `;
-
   // ───────────── gyldent energi-skjold (ærlig hitbox m. lyn-kant + træf-ripple) ─────────────
   const SH_VS = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`;
   const SH_FS = `
@@ -233,7 +211,6 @@
       gl_FragColor=vec4(col*a, a);
     }
   `;
-
   // ── rigtige lydfiler (baggrund.mp3 / select.wav / open.wav) ──
   function primeAudio(){ ['bg','sfx-select','sfx-open'].forEach(id=>{ const a=$(id); if(!a) return;   // unlock på user-gesture
     a.play().then(()=>{ a.pause(); a.currentTime=0; }).catch(()=>{}); }); }
@@ -241,7 +218,6 @@
   function playOpenDelayed(){ setTimeout(()=>{ if(state==='ascend'||state==='portal') playSfx('sfx-open',0.8); },1000); }   // åbningslyd starter 1s senere
   function startBg(){ const a=$('bg'); if(!a) return; a.volume=0.28; a.play().catch(()=>{}); }        // idempotent: play() på kørende loop = no-op
   function stopSfx(id){ const a=$(id); if(!a) return; a.pause(); a.currentTime=0; }
-
   let ac = null;
   function beep(freq, dur=0.08, type='sine', vol=0.18){
     if(!ac) return; const t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
@@ -265,14 +241,11 @@
   function popSound(){ nz(0.16,0.055,1100,0.7); beep(880,0.07,'sine',0.05); setTimeout(()=>beep(1320,0.08,'sine',0.04),40); } // poof + glimt
   function rumble(){ swoop(140,68,0.5,'sine',0.04); }                                                // mild, rund torden
   function skyClearChime(){ [523,659,784,1047,1319].forEach((f,i)=> setTimeout(()=>beep(f,0.2,'sine',0.06),i*95)); nz(0.4,0.025,520,0.5); }
-
   init();
-
   function init(){
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
     scene.add(camera);
-
     renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference:'high-performance' });
     renderer.setPixelRatio(Math.min(devicePixelRatio,2));
     renderer.setSize(innerWidth, innerHeight);
@@ -281,16 +254,13 @@
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.NoToneMapping;
     document.body.appendChild(renderer.domElement);
-
     scene.add(new THREE.AmbientLight(0xffffff, 0.8));
     const key = new THREE.DirectionalLight(0xffffff, 0.7); key.position.set(1,4,2); scene.add(key);
     const rim = new THREE.DirectionalLight(0x88aaff, 0.3); rim.position.set(-2,1,-1); scene.add(rim);
-
     $('start-button').addEventListener('click', launch);
     $('exit-x').addEventListener('click', () => xrMode ? endXR() : exitPreview());
     addEventListener('resize', () => { camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
   }
-
   async function launch(){
     if(isLaunching) return; isLaunching = true;
     try{ ac = ac || new (window.AudioContext||window.webkitAudioContext)(); ac.resume(); }catch(e){}
@@ -301,7 +271,6 @@
     if(navigator.xr){ try{ ok = await navigator.xr.isSessionSupported('immersive-ar'); }catch(e){} }
     if(ok) startAR(); else startPreview();
   }
-
   async function startAR(){
     try{
       const session = await navigator.xr.requestSession('immersive-ar', {
@@ -310,9 +279,9 @@
       onSessionStarted(session);
     }catch(e){ console.error('AR refused:', e); isLaunching=false; $('toast').classList.remove('show'); startPreview(); }
   }
-
   function onSessionStarted(session){
     xrMode = true;
+    tutSeen = false;   // hver ny XR-session (også uden refresh) starter med flyveskolen
     $('start-button').style.display='none';
     $('overlay').classList.add('webxr-hidden');
     document.body.classList.add('in-session');
@@ -324,9 +293,9 @@
     renderer.setAnimationLoop(render);
     startSelect();
   }
-
   function startPreview(){
     xrMode = false;
+    tutSeen = false;   // også preview: tutorial hver gang
     $('start-button').style.display='none';
     $('overlay').classList.add('webxr-hidden');
     document.body.classList.add('in-session');
@@ -338,25 +307,21 @@
     addEventListener('mousedown', () => { longTapStart = Date.now(); fire(); });
     addEventListener('mouseup', () => { longTapStart = 0; if(state !== 'menu' && GAMES.includes(state)) prompt(''); });
     addEventListener('keydown', e => { if(e.key==='m'||e.key==='Escape') back(); });
-
     // Preview mode startup sequence
     state = 'ascend';
     ascendT = 0;
     ascendFrom.set(0, -0.8, -0.6); // Start dragen længere nede
     kite.position.copy(ascendFrom);
     kite.visible = true;
-
     renderer.setAnimationLoop(render);
   }
   let mNDC = new THREE.Vector2(0,0);
   function onMouse(e){ mNDC.set((e.clientX/innerWidth)*2-1, -((e.clientY/innerHeight)*2-1)); }
-
   function cloudTex(){
     const c=document.createElement('canvas'); c.width=c.height=128; const x=c.getContext('2d');
     const g=x.createRadialGradient(64,64,4,64,64,62); g.addColorStop(0,'rgba(255,255,255,.95)'); g.addColorStop(.6,'rgba(255,255,255,.55)'); g.addColorStop(1,'rgba(255,255,255,0)');
     x.fillStyle=g; x.fillRect(0,0,128,128); const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
   }
-
   function glowTex(){
     const c=document.createElement('canvas'); c.width=c.height=256; const x=c.getContext('2d');
     const g=x.createRadialGradient(128,128,0,128,128,128);
@@ -366,7 +331,6 @@
     x.fillStyle=g; x.fillRect(0,0,256,256);
     const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
   }
-
   // gylden energi-glød (bold + skud) — matcher lynet i Tordenskyer
   function energyTex(){
     const c=document.createElement('canvas'); c.width=c.height=128; const x=c.getContext('2d');
@@ -381,7 +345,6 @@
     sp.scale.setScalar(s); mesh.add(sp); return sp;
   }
   function flareBall(k){ ballFlare = Math.max(ballFlare, k); }   // flare ved serv / mål / træf
-
   function setShield(hw,hh){
     if(!kiteShield) return;
     const fresh = shieldTarget < 1;
@@ -395,7 +358,6 @@
   function hideShield(){ shieldTarget = 0; }
   function shieldHit(x,y){ if(!kiteShield || !kiteShield.visible) return;
     kiteShield.material.uniforms.uHit.value.set(x,y); kiteShield.material.uniforms.uHitAge.value = 0; }
-
   function buildScene(){
     gameRig = new THREE.Group();
     gameRig.position.set(0, 1.35, -1.5);
@@ -403,17 +365,14 @@
     gameRig.scale.setScalar(0.001);
     gameRig.visible = false; // Holdes usynlig indtil portal-sekvensen starter
     scene.add(gameRig);
-
     skyDisc = new THREE.Mesh(new THREE.CircleGeometry(R,64),
       new THREE.ShaderMaterial({ uniforms:{ uTime:{value:0}, uNight:{value:0}, uStorm:{value:0} },
         vertexShader:SKY_VS, fragmentShader:SKY_FS, side:THREE.DoubleSide }));
     skyDisc.position.z = -0.15;
     gameRig.add(skyDisc);
-
     ring = new THREE.Mesh(new THREE.TorusGeometry(R,0.07,12,64),
       new THREE.MeshStandardMaterial({ color:0xeaf2ff, roughness:0.5, emissive:0x2b3a66, emissiveIntensity:0.25 }));
     ring.position.z = 0.0; gameRig.add(ring);
-
     // Magisk Glow effekt til portal-spawning
     portalGlow = new THREE.Sprite(new THREE.SpriteMaterial({
       map: glowTex(),
@@ -425,7 +384,6 @@
     portalGlow.position.set(0, 1.35, -1.4);
     portalGlow.visible = false;
     scene.add(portalGlow);
-
     texCloud = texCloud || cloudTex();
     for(let i=0;i<6;i++){
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:texCloud, transparent:true, depthWrite:false, opacity:0.9 }));
@@ -433,15 +391,12 @@
       s.position.set((Math.random()*2-1)*0.9, (Math.random()*2-1)*0.7, CLOUD_Z);
       s.userData.spd = 0.04 + Math.random()*0.05; gameRig.add(s); clouds.push(s);
     }
-
     scoreBanner = textPlane(0.9,0.2);
     scoreBanner.position.set(0,1.06,OBJ_Z); gameRig.add(scoreBanner);
     drawScore();
-
     buildKite();
     buildMenu();
     buildTutorial();
-
     // Gyldent energi-skjold om dragen (vises kun i bold-spil; viser den ÆGTE hitbox)
     kiteShield = new THREE.Mesh(new THREE.PlaneGeometry(1,1),
       new THREE.ShaderMaterial({
@@ -451,15 +406,12 @@
         transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide }));
     kiteShield.visible = false; kiteShield.renderOrder = 4;
     gameRig.add(kiteShield);
-
     snakeMesh = new THREE.InstancedMesh(G_SEG, new THREE.MeshLambertMaterial({ emissive:0x111111, emissiveIntensity:0.25 }), SNAKE_MAX);
     snakeMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     snakeMesh.frustumCulled = false; snakeMesh.count = 0; snakeMesh.visible = false;
     gameRig.add(snakeMesh);
-
     initPools();
   }
-
   function buildKite(){
     kite = new THREE.Group();
     const top=[0,0.24,0], rgt=[0.17,0.02,0], bot=[0,-0.30,0], lft=[-0.17,0.02,0], ctr=[0,0,0.02];
@@ -486,7 +438,6 @@
     stringLine=new THREE.Line(sgeo, new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.55 }));
     stringLine.visible=false; scene.add(stringLine);
   }
-
   function buildMenu(){
     const labels=['Pong','Mursten','Tordenskyer','Blå Himmel','Slange'];
     const pos=[[-0.7,0.42],[0,0.42],[0.7,0.42],[-0.38,-0.42],[0.38,-0.42]];
@@ -501,15 +452,15 @@
       grp.userData={ id:GAMES[i], ring:ringSel, label:lab }; grp.visible=false; gameRig.add(grp); menuClouds.push(grp);
     });
   }
-
-  // ── "Lær at flyve": 5 nummererede checkpoints — samme sky+ring-sprog som menuen, så træningen overfører 1:1 ──
+  // ── "Lær at flyve": 3 nummererede checkpoints — samme sky+ring-sprog som menuen, så træningen overfører 1:1 ──
+  function tutLab(i){ return i===TUT_POS.length-1 ? (i+1)+' 🏁' : ''+(i+1); }
   function buildTutorial(){
     tutPts=[];
     TUT_POS.forEach((p,i)=>{
       const grp=new THREE.Group(); grp.position.set(p[0],p[1],0.15);
       const cloud=new THREE.Sprite(new THREE.SpriteMaterial({ map:texCloud, transparent:true, depthWrite:false }));
       cloud.scale.set(0.5,0.36,1); grp.add(cloud);
-      const lab=textPlane(0.34,0.24, MENU_BLUE, i===4?'5 🏁':''+(i+1), MENU_FONT); lab.position.z=0.01; grp.add(lab);
+      const lab=textPlane(0.34,0.24, MENU_BLUE, tutLab(i), MENU_FONT); lab.position.z=0.01; grp.add(lab);
       const ringSel=new THREE.Mesh(new THREE.RingGeometry(0.16,0.185,32,1,0,0.001),
         new THREE.MeshBasicMaterial({ color:0x0ea5e9, side:THREE.DoubleSide, transparent:true, toneMapped:false }));
       ringSel.position.z=0.02; grp.add(ringSel);
@@ -517,7 +468,6 @@
       grp.visible=false; gameRig.add(grp); tutPts.push(grp);
     });
   }
-
   function enterTutorial(){
     gameRig.scale.setScalar(1);
     stopSfx('sfx-open'); startBg();
@@ -525,33 +475,31 @@
     menuClouds.forEach(g=>g.visible=false);
     tutIdx=0; tutDwell=0; tutDone=0;
     tutPts.forEach(g=>{ const u=g.userData; g.visible=true; u.done=false;
-      u.lab.userData.color=MENU_BLUE; drawLabel(u.lab, u.i===4?'5 🏁':''+(u.i+1));
+      u.lab.userData.color=MENU_BLUE; drawLabel(u.lab, tutLab(u.i));
       u.ring.material.color.setHex(0x0ea5e9);
       u.ring.geometry.dispose(); u.ring.geometry=new THREE.RingGeometry(0.16,0.185,32,1,0,0.001); });
     recenter();
     drawLabel(scoreBanner,'🎓 Lær at flyve');
     prompt('🪁 Flyv dragen hen til 1 — og bliv der!');
   }
-
   function tutHit(){
     const g=tutPts[tutIdx], u=g.userData;
     u.done=true; tutDone++; tutDwell=0;
-    u.lab.userData.color='#ffd166'; drawLabel(u.lab, u.i===4?'5 🏁':''+(u.i+1));       // tallet lyser op i guld
+    u.lab.userData.color='#ffd166'; drawLabel(u.lab, tutLab(u.i));                     // tallet lyser op i guld
     u.ring.material.color.setHex(0xffd166);
     u.ring.geometry.dispose(); u.ring.geometry=new THREE.RingGeometry(0.16,0.185,32,1,0,TAU);
     popAt(g.position.x, g.position.y, 0xffd166, 10);
     beep(523*Math.pow(1.19,tutIdx),0.1,'sine',0.12); setTimeout(()=>beep(784*Math.pow(1.19,tutIdx),0.12,'sine',0.1),90);   // stigende duo pr. punkt
-    if(tutDone>=tutPts.length){                                                        // 🏁 alle 5 lyser → menuen låses op
-      tutSeen=true; try{ localStorage.setItem('nxtKiteTut','1'); }catch(e){}
+    if(tutDone>=tutPts.length){                                                        // 🏁 alle 3 lyser → menuen låses op
+      tutSeen=true;                                                                    // KUN denne session — nulstilles ved teardown
       prompt('🎉 Du kan flyve! Nu åbner spillene…');
       skyClearChime(); popAt(0,0.2,0x9be0ff,20); popAt(0.3,-0.2,0xff7aa2,14); popAt(-0.3,0,0x9be870,14);
       setTimeout(()=>{ if(state==='tutorial'){ tutPts.forEach(g=>g.visible=false); enterMenu(); } },2200);
     } else {
       tutIdx++;
-      prompt(tutIdx===4 ? '🏁 Sidste stop — flyv i mål!' : '✨ Flot! Videre til '+(tutIdx+1));
+      prompt(tutIdx===TUT_POS.length-1 ? '🏁 Sidste stop — flyv i mål!' : '✨ Flot! Videre til '+(tutIdx+1));
     }
   }
-
   function updateTutorial(dt){
     if(tutDone>=tutPts.length) return;                       // finale-fest kører — vent på enterMenu
     const t=clock.elapsedTime;
@@ -568,7 +516,6 @@
     u.ring.geometry=new THREE.RingGeometry(0.16,0.185,32,1,-Math.PI/2, Math.max(0.001, Math.min(1,tutDwell/TUT_DWELL)*TAU));
     if(tutDwell>=TUT_DWELL) tutHit();
   }
-
   function initPools(){
     parts=[]; for(let i=0;i<PART_N;i++){ const m=new THREE.Mesh(G_PART, new THREE.MeshBasicMaterial({ transparent:true, depthWrite:false, toneMapped:false }));
       m.visible=false; scene.add(m); parts.push({ m, on:false, v:new THREE.Vector3(), age:0, life:0, base:0.02 }); }
@@ -576,7 +523,6 @@
       m.visible=false; m.position.z=OBJ_Z; gameRig.add(m);
       bullets.push({ m, on:false, vx:0, vy:0, age:0 }); }
   }
-
   function textPlane(w,h,color,txt,font){
     const c=document.createElement('canvas'); c.width=512; c.height=Math.round(512*h/w);
     const tex=new THREE.CanvasTexture(c); tex.encoding=THREE.sRGBEncoding;
@@ -591,7 +537,6 @@
     x.textAlign='center'; x.textBaseline='middle'; x.fillText(txt,c.width/2,c.height/2); tex.needsUpdate=true; }
   function drawScore(){ if(!scoreBanner) return;
     drawLabel(scoreBanner, GAMES.includes(state) ? '⭐ '+score+'   🏆 '+(highs[state]|0) : '🪁 Drageflugt'); }
-
   function buildHUDs(){
     clapHUD=new THREE.Group(); clapHUD.position.set(0,0.1,-0.7);
     const c=document.createElement('canvas'); c.width=1024; c.height=220;
@@ -600,12 +545,13 @@
       new THREE.MeshBasicMaterial({ map:tex, transparent:true, toneMapped:false, depthTest:false, depthWrite:false }));
     mesh.renderOrder=999; clapHUD.add(mesh);
     clapHUD.userData={ c, x:c.getContext('2d'), tex }; clapHUD.visible=false; camera.add(clapHUD);
-
     promptHUD=textPlane(0.78,0.135,'#0f172a','');
     promptHUD.position.set(0,0.26,-0.8); promptHUD.renderOrder=998;
     promptHUD.material.depthTest=false; promptHUD.visible=false; camera.add(promptHUD);
   }
   function prompt(txt){ if(!promptHUD) return; if(!txt){ promptHUD.visible=false; return; }
+    // Flyveskole + menu: HUD-boblen flyttes NED, så den ikke dækker portalen. Alle andre steder: normal højde.
+    promptHUD.position.y = (state==='tutorial'||state==='menu') ? -0.30 : 0.26;
     promptHUD.visible=true; drawPromptGlass(promptHUD, txt); }
   function drawPromptGlass(m,txt){ const {c,x,tex}=m.userData; x.clearRect(0,0,c.width,c.height);
     const W=c.width,H=c.height,Rr=H/2; x.fillStyle='rgba(255,255,255,0.92)'; roundRect(x,8,8,W-16,H-16,Rr); x.fill();
@@ -613,9 +559,7 @@
     do{ x.font='800 '+f+'px -apple-system,"SF Pro Rounded",sans-serif'; f-=2; }
     while(x.measureText(txt).width>W*0.80 && f>16);
     x.textAlign='center'; x.textBaseline='middle'; x.fillText(txt,W/2,H/2); tex.needsUpdate=true; }
-
   function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
-
   function buildControllers(session){
     controllers=[];
     for(let i=0;i<2;i++){
@@ -635,7 +579,6 @@
   }
   function startSelect(){ state='select'; isSelecting=true; selStart=clock.getElapsedTime(); holdStart={};
     kite.visible=false; stringLine.visible=false; prompt('✋ Løft din frie hånd'); }
-
   function processSelect(){
     if(!isSelecting) return;
     const el=(clock.getElapsedTime()-selStart)*1000; let bestY=-Infinity, best=-1;
@@ -657,11 +600,9 @@
     activeController.getWorldPosition(ascendFrom); kite.position.copy(ascendFrom);
     prompt('🪁 Følg dragen op i himlen');
   }
-
   function setNight(on){ nightTarget = on ? 1 : 0; }   // smooth lerp happens in render()
-
   function enterMenu(){
-    if(!tutSeen) return enterTutorial();               // allerførste gang: flyveskole før menuen
+    if(!tutSeen) return enterTutorial();               // hver session: flyveskole før menuen
     gameRig.scale.setScalar(1); // Sørg for fuld størrelse
     stopSfx('sfx-open'); startBg();   // portalen er helt åben → baggrund.mp3 looper herfra (menu + alle spil)
     state='menu'; clearGames(); setNight(false);
@@ -671,7 +612,6 @@
     setTimeout(()=>{ if(state==='menu') prompt(''); },5000);   // HUD-boblen fader efter 5s — titlen på portalen bliver
     drawLabel(scoreBanner,'🪁 Vælg et spil');
   }
-
   function updateMenu(dt){
     let over=-1;
     menuClouds.forEach((g,i)=>{
@@ -688,7 +628,6 @@
       const ring=g.userData.ring; ring.geometry.dispose(); ring.geometry=new THREE.RingGeometry(0.2,0.22,32,1,-Math.PI/2, Math.max(0.001, frac*Math.PI*2)); });
     if(over>=0){ dwell+=dt; if(dwell>=1.1) startGame(menuClouds[over].userData.id); }
   }
-
   function startGame(id){
     longTapStart = 0;
     menuClouds.forEach(g=>g.visible=false); clearGames(); recenter(); prompt('');
@@ -716,7 +655,6 @@
     if(kite) kite.scale.setScalar(1);                                                 // nulstil drage-størrelse (Blå Himmel skrumper den)
   }
   function recenter(){ if(activeController){ activeController.getWorldQuaternion(neutralQuat); } kiteLocal.set(0,0); aimDir.set(0,1); }
-
   // ── PONG (adaptiv modstander: let → mellem → svær) ──
   function pongLevel(){ return pongTime>240 ? 2 : pongTime>120 ? 1 : 0; }
   function initPong(){
@@ -763,7 +701,6 @@
   function resetBall(){ const s=[0.5,0.62,0.78][pongLevel()];
     ball.position.set(0,(Math.random()*0.6-0.3),OBJ_Z); ballV.set(s*(Math.random()>.5?1:-1),(Math.random()*0.5-0.25));
     flareBall(1); }   // gylden "afsendt"-effekt ved serv
-
   // ── MURSTEN (6 baner + guld-sten) ──
   const BK_LVLS=[
     ['11111','11111','11111'],
@@ -818,7 +755,6 @@
       makeBricks(); }
     capV(1.0+0.05*Math.min(bkLvl,6));
   }
-
   // ════════ TORDENSKY: 3D kawaii cloud-rig (delt geometri/materiale, 1 sæt for alle fjender) ════════
   function cloudShared(){
     if(CG) return CG;
@@ -870,8 +806,10 @@
   }
   function happyEyes(r){ r.eyeL.scale.y=0.18; r.eyeR.scale.y=0.18; r.eyeL.rotation.z=0.25; r.eyeR.rotation.z=-0.25; }   // ^_^
   // Død/score-reaktion drevet af progress p∈[0,1]. 'pop'=Quick Happy Pop · 'flutter'/'overload'=randomiseret score-reaktion
+  // Alle typer: LYN-glimt i starten af døds-animationen (tordenskyen aflader) — parret med rumble() ved træf
   function deathPose(r,type,p){
     p=Math.min(1,p); r.rain.forEach(d=>d.visible=false);
+    if(p<0.35 && type!=='overload'){ r.bolt.visible=true; r.bolt.scale.setScalar(1.4+p*8+Math.random()*0.8); }   // lyn-afladning ved træf
     if(type==='overload'){                                        // ryster, lyn vokser, forsvinder
       if(p<0.5){ r.root.position.x=Math.sin(p*70)*0.05; r.bolt.visible=true; r.bolt.scale.setScalar(1.5+p*16); happyEyes(r); }
       else r.root.scale.setScalar(Math.max(0.001,1-(p-0.5)/0.5));
@@ -887,7 +825,6 @@
       r.body.children.forEach(c=>{ if(c.userData.bp){ c.position.set(c.userData.bp.x*(1+q*12),c.userData.bp.y*(1+q*12),c.userData.bp.z*(1+q*12)); c.scale.setScalar(Math.max(0,c.userData.bs*(1-q))); } });
       r.bolts.forEach(b=>b.visible=false); const s=Math.max(0.001,1-q); r.eyeL.scale.setScalar(s); r.eyeR.scale.setScalar(s); }
   }
-
   // ── TORDENSKYER (klassisk Space-Invaders: spawn øverst → march + trin ned · hurtigere når der er færre/højere bølge · jorden = game over) ──
   function initInvaders(){
     setNight(false); cloudShared(); waveN=0; makeWave();
@@ -907,6 +844,7 @@
   function hitEnemy(e,ex,ey){
     e.dying=true; e.deathT=0; const r=Math.random();                                          // Shot/Death=pop · Score=flutter/overload
     e.deathType = r<0.55 ? 'pop' : r<0.78 ? 'flutter' : 'overload';
+    rumble();                                                                                  // torden fra Blå Himmel — skyen aflader
     beep(950,0.05,'square',0.08); popAt(ex,ey,0xfff3b0,8);
   }
   function invadersOver(){
@@ -924,7 +862,6 @@
     igX += igDir*igSpd*sf*dt;
     if(igX> 0.24){ igX=0.24; igDir=-1; igY-=0.085; }                                              // ramt kant → vend + trin ned
     else if(igX<-0.24){ igX=-0.24; igDir=1; igY-=0.085; }
-
     let over=false;
     for(const e of invaders){
       const ex=e.bx+igX, ey=e.by+igY;
@@ -939,20 +876,16 @@
         e.rig.root.rotation.y=k*0.5; e.rig.eyeL.rotation.y=k*0.3; e.rig.eyeR.rotation.y=k*0.3; }
       else if(Math.random()<dt*0.05){ e.lookT=e.lookDur=1.2; }
     }
-
     for(const b of bullets){ if(!b.on) continue; b.m.position.x+=b.vx*dt; b.m.position.y+=b.vy*dt; b.age+=dt;
       if(b.m.position.y>1.05||b.age>3){ b.on=false; b.m.visible=false; continue; }
       for(const e of invaders){ if(e.dying) continue; const ex=e.bx+igX, ey=e.by+igY;
         if(Math.abs(b.m.position.x-ex)<0.13 && Math.abs(b.m.position.y-ey)<0.13){ b.on=false; b.m.visible=false; hitEnemy(e,ex,ey); addScore(3); break; } }
     }
-
     for(let i=invaders.length-1;i>=0;i--) if(invaders[i]._dead){ gameRig.remove(invaders[i].holder); invaders.splice(i,1); }
-
     if(over){ invadersOver(); return; }
     if(invaders.length===0){ waveN++; addScore(5); prompt('🌩️ Bølge '+(waveN+1)+'!');
       setTimeout(()=>{ if(state==='invaders') prompt(''); },1500); beep(740,0.08); setTimeout(()=>beep(990,0.1),100); makeWave(); }
   }
-
   // ════════ BLÅ HIMMEL — klassisk Asteroids m. søde sky-væsner (Quest 3-venlig) ════════
   // 3 størrelser: STOR (boss) → MELLEM (chok) → LILLE (svimmel). Skyd stor → 2 mellem → 2 små → poof.
   // Mindre = hurtigere. Hver bølge: flere + hurtigere (start let). Mange skyer = mørk grå himmel;
@@ -964,7 +897,6 @@
     0:[{x:-.22,y:0,s:.6},{x:.3,y:.06,s:.5}]
   };
   const SKY_SIZE=[.10,.17,.26], SKY_TM=[2.0,1.5,1.0], SKY_FACE=['round','shocked','boss'];
-
   function skyFaceTex(expr){
     const c=document.createElement('canvas'); c.width=c.height=256; const x=c.getContext('2d');
     const cx=128, ex=54, cy=124, Rr=46; x.lineCap='round'; x.lineJoin='round';
@@ -990,7 +922,6 @@
       x.beginPath(); x.arc(cx+ex+12,cy+46,15,0,TAU); x.fill(); }
     const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
   }
-
   function skyShared(){
     if(SG) return SG;
     const fm={}; ['boss','shocked','round','happy'].forEach(e=>{ fm[e]=new THREE.MeshBasicMaterial({ map:skyFaceTex(e), transparent:true, depthWrite:false, toneMapped:false }); });
@@ -999,7 +930,6 @@
          faceMat:fm };
     return SG;
   }
-
   function spawnCloud(x,y,vx,vy,tier){
     const g=skyShared(), root=new THREE.Group(), size=SKY_SIZE[tier], puffs=[];
     SKY_PUFFS[tier].forEach(p=>{ const m=new THREE.Mesh(g.puff,g.matCloud);
@@ -1012,21 +942,18 @@
     root.position.set(x,y,OBJ_Z); root.scale.setScalar(.3); gameRig.add(root);
     rocks.push({ root,tier,size,fs,vx,vy,light,puffs,face,bob:Math.random()*TAU,birth:0,blink:2+Math.random()*3,blinkT:0,flashT:0,dying:false,deathT:0 });
   }
-
   function spawnWave(){
     skyWave++;
     const n=Math.min(3+skyWave,5), bs=0.10+skyWave*0.02;     // bølge 1 = 4 langsomme · vokser i antal+fart
     for(let i=0;i<n;i++){ const e=Math.random()*TAU, a=Math.random()*TAU;
       spawnCloud(Math.cos(e)*1.05, Math.sin(e)*.92, Math.cos(a)*bs, Math.sin(a)*bs, 2); }
   }
-
   function initAsteroids(){
     setNight(false); stormWait=0; rocks=[]; skyWave=0; skyShared();
     if(kite) kite.scale.setScalar(0.6);                       // mindre drage → større arena
     spawnWave();
     prompt('🌧️ Pust uvejret væk!'); setTimeout(()=>{ if(state==='asteroids') prompt(''); },2300);
   }
-
   function hitCloud(c,i){
     addScore([5,3,2][c.tier]);                                // klassisk: lille = flest point
     if(c.tier>0){                                             // stor/mellem → splittes i to mindre
@@ -1040,7 +967,6 @@
       popAt(c.root.position.x,c.root.position.y,0xa3e635,10); popSound();
     }
   }
-
   function deathPoof(c,dt){
     c.deathT=Math.min(1,c.deathT+dt/0.42); const q=c.deathT;
     c.puffs.forEach(p=>{ const bp=p.userData.bp, bs=p.userData.bs;
@@ -1049,17 +975,14 @@
     c.face.scale.setScalar(c.fs*(1-q));
   }
   function removeCloud(c,i){ if(c.root) gameRig.remove(c.root); rocks.splice(i,1); }
-
   function drip(x,y){ for(const p of parts){ if(p.on) continue;     // små regndråber fra de store skyer
     p.on=true; p.age=0; p.life=0.7; p.base=0.012; p.v.set(0,-0.2,0);
     _v.set(x,y,OBJ_Z); gameRig.localToWorld(_v); p.m.position.copy(_v);
     p.m.visible=true; p.m.scale.setScalar(p.base); p.m.material.color.setHex(0x8ec9ff); p.m.material.opacity=0.9; return; } }
-
   function updateAsteroids(dt){
     const inp=getInput(); if(inp.lengthSq()>0.02) aimDir.lerp(_td.copy(inp).normalize(),0.2).normalize();
     let mass=0; for(const c of rocks) if(!c.dying) mass+=(c.tier+1);   // sky-masse styrer himlens mørke
     stormTarget=Math.min(1, mass/13);
-
     for(let i=rocks.length-1;i>=0;i--){ const c=rocks[i];
       if(c.dying){ deathPoof(c,dt); if(c.deathT>=1) removeCloud(c,i); continue; }
       c.bob+=dt;
@@ -1078,13 +1001,11 @@
           if(Math.random()<dt*0.7) drip(c.root.position.x+(Math.random()-0.5)*c.size, c.root.position.y-c.size*0.5); }
       }
     }
-
     for(const b of bullets){ if(!b.on) continue; b.m.position.x+=b.vx*dt; b.m.position.y+=b.vy*dt; b.age+=dt;
       if(Math.abs(b.m.position.x)>1.2||Math.abs(b.m.position.y)>1.2||b.age>2){ b.on=false; b.m.visible=false; continue; }
       for(let i=rocks.length-1;i>=0;i--){ const c=rocks[i]; if(c.dying) continue;
         if(Math.hypot(b.m.position.x-c.root.position.x, b.m.position.y-c.root.position.y) < c.size+0.05){ b.on=false; b.m.visible=false; hitCloud(c,i); break; } }
     }
-
     let alive=0; for(const c of rocks) if(!c.dying) alive++;
     if(alive===0){
       if(stormWait<=0){ stormWait=3.5; addScore(10); prompt('☀️ Klar blå himmel! +10'); popAt(0,0.3,0xffd166,18); skyClearChime(); }
@@ -1092,7 +1013,6 @@
       if(stormWait<=0){ stormWait=0; prompt(''); spawnWave(); }     // nyt uvejr ruller ind (sværere)
     }
   }
-
   // ── SLANGE (dragon-snake) ──
   function initSnake(){
     setNight(false); kiteTail.visible=false;               // the long body IS the tail now
@@ -1153,7 +1073,6 @@
       if(Math.hypot(kiteLocal.x-s.x, kiteLocal.y-s.y)<0.045){ snakeHit(); break; } } }
     _v.set(kiteLocal.x,kiteLocal.y,KITE_Z); gameRig.localToWorld(_v); kite.position.copy(_v); orientKite(dt);
   }
-
   // ───────────────────────── shared helpers ─────────────────────────
   function capV(mx){ const s=ballV.length(); if(s>mx) ballV.multiplyScalar(mx/s); if(s<0.35&&s>0) ballV.multiplyScalar(0.35/s); }
   function addScore(n){ score+=n;
@@ -1162,7 +1081,6 @@
       if(!beatHigh && sessionPrevHigh>0 && score>sessionPrevHigh){ beatHigh=true;   // fejr ny rekord — én gang pr. session
         prompt('🏆 Ny rekord!'); setTimeout(()=>{ if(GAMES.includes(state)) prompt(''); },1600);
         beep(880,0.08); setTimeout(()=>beep(1175,0.1),100); popAt(kiteLocal.x,kiteLocal.y,0xffd166,12); } } }
-
   function getInput(){
     if(xrMode && activeController){
       activeController.getWorldQuaternion(_q); _q.premultiply(neutralQuat.clone().invert());
@@ -1173,7 +1091,6 @@
     }
     return _inp.set(-mNDC.x*PW, mNDC.y*PH);
   }
-
   function computeKite(dt){
     const inp=getInput(); let tx=inp.x, ty=inp.y;
     if(state==='pong'){ tx=-0.92; }
@@ -1203,7 +1120,6 @@
       arr[i*3]=x; arr[i*3+1]=y; arr[i*3+2]=z; }
     stringLine.geometry.attributes.position.needsUpdate=true;
   }
-
   function fire(){
     if(state==='tutorial'){ const g=tutPts[tutIdx];                                             // tryk = turbo-opladning (samme mentale model som menuen)
       if(g && Math.hypot(kiteLocal.x-g.position.x, kiteLocal.y-g.position.y)<0.24) tutDwell=TUT_DWELL; return; }
@@ -1214,7 +1130,6 @@
     else if(state==='asteroids'){ shoot(kiteLocal.x,kiteLocal.y, aimDir.x*1.9, aimDir.y*1.9); shootSound(); }   // blød "pew" i sigte-retning
   }
   function shoot(x,y,vx,vy){ for(const b of bullets){ if(!b.on){ b.on=true; b.age=0; b.vx=vx; b.vy=vy; b.m.visible=true; b.m.position.set(x,y,OBJ_Z); return; } } }
-
   function popAt(localX,localY,color,n){ _v.set(localX,localY,OBJ_Z); gameRig.localToWorld(_v); spawnBurst(_v,color,n); }
   function burst(obj,n){ obj.getWorldPosition(_v); spawnBurst(_v,0x9be0ff,n,true); }
   function spawnBurst(pos,color,n,confetti){
@@ -1229,7 +1144,6 @@
     if(p.age>p.life){ p.on=false; p.m.visible=false; continue; }
     p.m.position.addScaledVector(p.v,dt); p.v.y-=0.9*dt; p.v.multiplyScalar(0.99);
     p.m.material.opacity=1-p.age/p.life; p.m.scale.setScalar(p.base*Math.max(0.2,1-p.age/p.life*0.6)); } }
-
   // ───────────────────────── clap ─────────────────────────
   function checkClap(){ if(!xrMode || controllers.length<2){ clapStart=0; return; }
     const a=controllers[0], b=controllers[1];
@@ -1249,7 +1163,6 @@
     if(prog>0){ const g=x.createLinearGradient(bx,0,bx+bw,0); g.addColorStop(0,'#bae6fd'); g.addColorStop(1,'#0ea5e9'); x.fillStyle=g;
       roundRect(x,bx,by,Math.max(br*2,Math.round(bw*prog)),bh,br); x.fill(); }
     tex.needsUpdate=true; }
-
   // ───────────────────────── exit ─────────────────────────
   function endXR(){ if(renderer.xr.getSession()) renderer.xr.getSession().end(); }
   function onSessionEnd(){ teardown(); }
@@ -1262,6 +1175,7 @@
     [gameRig,kite,stringLine,portalGlow].forEach(o=>{ if(o&&o.parent) o.parent.remove(o); });
     clouds=[]; menuClouds=[]; bricks=[]; invaders=[]; rocks=[]; parts=[]; bullets=[];
     tutPts=[]; tutIdx=0; tutDwell=0; tutDone=0;
+    tutSeen=false;   // næste session (uden refresh) skal også igennem flyveskolen
     snakeMesh=null; foodMesh=null; snakeBody=[]; snakeLen=0; snakeTarget=0;
     if(clapHUD&&clapHUD.parent) clapHUD.parent.remove(clapHUD);
     if(promptHUD&&promptHUD.parent) promptHUD.parent.remove(promptHUD);
@@ -1269,11 +1183,9 @@
     kiteShield=null; ballGlow=null; shieldA=0; shieldTarget=0; ballFlare=0; beatHigh=false; sessionPrevHigh=0;
     state='closed'; xrMode=false; isLaunching=false; portalT=0; nightTarget=0; stormTarget=0; stormWait=0; clapStart=0; activeController=null; longTapStart=0; glowT=0;
   }
-
   // ───────────────────────── main loop ─────────────────────────
   function render(time, frame){
     const dt=Math.min(clock.getDelta(),1/30);
-
     // animate procedural sky + smooth day/night/storm, drive cloud + ring ambiance
     if(skyDisc){ const u=skyDisc.material.uniforms; u.uTime.value+=dt;
       u.uNight.value += (nightTarget-u.uNight.value)*Math.min(1,dt*1.5);
@@ -1282,27 +1194,21 @@
       for(const c of clouds){ c.material.opacity=0.9*(1-ny); c.material.color.setScalar(1-st*0.45); }
       if(ring) ring.material.emissiveIntensity=0.25+ny*0.35;
     }
-
     if(xrMode){ checkClap(); drawClapHUD(); if(isSelecting) processSelect(); }
-
     // 9-second hold-to-exit
     if(longTapStart > 0 && GAMES.includes(state)) {
       const el = Date.now() - longTapStart;
       if (el > 500) { prompt('⏳ Menu om ' + Math.ceil((LONG_TAP_TIME - el) / 1000) + 's'); }
       if (el >= LONG_TAP_TIME) { longTapStart = 0; back(); }
     }
-
     // ─── DRAMATISK INTRO-SEKVENS ───
     if (state === 'ascend') {
       ascendT = Math.min(1, ascendT + dt * 0.22); // ~4.5 sekunders langsom opstigning
       const e = ascendT * ascendT * (3 - 2 * ascendT);
-
       _v.set(0, 0, KITE_Z);
       gameRig.localToWorld(_v); // Dragen svæver hen mod midten af det usynlige gameRig
-
       kite.position.lerpVectors(ascendFrom, _v, e);
       orientKite(dt);
-
       if (ascendT >= 1) {
         state = 'portal';
         portalT = 0;
@@ -1319,44 +1225,37 @@
     }
     else if (state === 'portal') {
       glowT += dt;
-
       // Animér det magiske lys bagved dragen
       if (portalGlow) {
         let gAlpha = glowT < 0.5 ? (glowT / 0.5) : Math.max(0, 1 - (glowT - 0.5) / 0.7);
         portalGlow.material.opacity = gAlpha * 0.9;
         portalGlow.scale.setScalar(0.5 + glowT * 6); // Lyset pulserer voldsomt op
       }
-
       // Selve himmel-portalen åbnes, efter lyset er vokset
       if (glowT > 0.4) {
         portalT = Math.min(1, portalT + dt * 0.5); // Slower spawn (2 sekunder om at åbne)
         const e = 1 - Math.pow(1 - portalT, 3);
         gameRig.scale.setScalar(0.001 + e);
       }
-
       // Lås dragen til lokal midte, så den skubbes elegant ud med portalen!
       kiteLocal.set(0, 0);
       _v.set(0, 0, KITE_Z);
       gameRig.localToWorld(_v);
       kite.position.copy(_v);
       orientKite(dt);
-
       if (portalT >= 1 && glowT > 1.2) {
         if (portalGlow) portalGlow.visible = false;
-        enterMenu();   // → første gang på devicet omdirigeres til "Lær at flyve"
+        enterMenu();   // → hver session omdirigeres først til "Lær at flyve"
       }
     }
     // ─── END INTRO ───
-
     if(state!=='ascend' && state!=='select' && state!=='portal' && clouds.length){
       for(const c of clouds){
         c.position.x+=c.userData.spd*dt;
         if(c.position.x>1.05) c.position.x=-1.05;
       }
     }
-
     if(ring) ring.rotation.z += dt*0.05;
-
     if(state==='tutorial'){ computeKite(dt); updateTutorial(dt); }
     else if(state==='menu'){ computeKite(dt); updateMenu(dt); }
     else if(state==='pong'){ computeKite(dt); updatePong(dt); }
@@ -1364,7 +1263,6 @@
     else if(state==='invaders'){ computeKite(dt); updateInvaders(dt); }
     else if(state==='asteroids'){ computeKite(dt); updateAsteroids(dt); }
     else if(state==='snake'){ updateSnake(dt); }
-
     // gyldent skjold: fade, sitren og træf-ripple
     if(kiteShield && kiteShield.visible){
       const u=kiteShield.material.uniforms;
@@ -1376,10 +1274,8 @@
     ballFlare=Math.max(0, ballFlare-dt*2.4);
     if(ballGlow){ ballGlow.scale.setScalar(0.2 + ballFlare*0.34 + Math.sin(clock.elapsedTime*8)*0.012);
       ballGlow.material.opacity=0.8 + 0.2*ballFlare; }
-
     updateParts(dt);
     if(score!==lastScore){ drawScore(); lastScore=score; }
-
     renderer.render(scene, camera);
   }
   </script>
